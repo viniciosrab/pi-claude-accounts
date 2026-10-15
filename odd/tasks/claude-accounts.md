@@ -32,3 +32,4 @@ L6: review "oque acha da extensao" -> "go" on: concurrency between Pi instances,
     Bridge auth failure reaches Pi as assistant message_end stopReason "error", errorMessage "Failed to authenticate. API Error: 401 OAuth access token is invalid."; malformed token: "Not logged in · Please run /login".
 L7: "so quero que exiba o nome da conta ativa so isso" (footer showed "Claude: default · 5h 23%") — footer now shows only the account name.
 L8: "so mude na extensao para vinicios10 a default" — login account is now recognised by having no token; added rename; renamed default -> vinicios10.
+L9: "tire do rodape ... so preciso ver a mensagem quando a troca ocorrer" — footer status removed; switch and rejected-token notifications kept.
