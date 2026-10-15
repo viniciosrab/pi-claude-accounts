@@ -30,3 +30,4 @@ L5: "corrigir" — check other accounts usage before switching. Usage endpoint a
 L6: review "oque acha da extensao" -> "go" on: concurrency between Pi instances, footer status, lighter probe + switch on auth failure.
     Probe flags --setting-sources= --strict-mcp-config --tools= --no-session-persistence --disable-slash-commands: 8.9s -> 1.8s, no hooks, no session files, five_hour still reported. --bare unusable (ignores OAuth).
     Bridge auth failure reaches Pi as assistant message_end stopReason "error", errorMessage "Failed to authenticate. API Error: 401 OAuth access token is invalid."; malformed token: "Not logged in · Please run /login".
+L7: "so quero que exiba o nome da conta ativa so isso" (footer showed "Claude: default · 5h 23%") — footer now shows only the account name.

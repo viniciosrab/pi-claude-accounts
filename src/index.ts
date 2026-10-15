@@ -83,7 +83,7 @@ export default function (pi: ExtensionAPI) {
 	// Footer line; hidden while another provider is selected.
 	const showStatus = (ctx: ExtensionContext, provider = ctx.model?.provider) => {
 		const onBridge = !provider || provider === PROVIDER;
-		ctx.ui.setStatus(STATUS_KEY, onBridge ? formatStatus(load(), now()) : undefined);
+		ctx.ui.setStatus(STATUS_KEY, onBridge ? formatStatus(load()) : undefined);
 	};
 
 	pi.on("model_select", (event, ctx) => safe(ctx, () => showStatus(ctx, event.model.provider)));
