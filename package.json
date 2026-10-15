@@ -1,0 +1,11 @@
+{
+  "name": "pi-claude-accounts",
+  "version": "0.1.0",
+  "description": "Pi extension: multiple Claude Code accounts for claude-bridge with automatic switching at 95% of the 5h window.",
+  "keywords": ["pi-package", "pi", "extension", "claude-code"],
+  "license": "MIT",
+  "type": "module",
+  "scripts": { "test": "node --test tests/*.test.ts" },
+  "pi": { "extensions": ["./src/index.ts"] },
+  "peerDependencies": { "@earendil-works/pi-coding-agent": "*" }
+}
