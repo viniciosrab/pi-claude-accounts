@@ -22,9 +22,9 @@ Bridge facts: CLI spawned per run and kept across its tool calls (L11), inherits
 - T8 (L6) store re-read before every write, atomic rename + tests — inline — commit: 0617976
 - T9 (L6) footer status: active account + 5h usage + tests — inline — commit: 209edfd
 - T10 (L6) lighter probe flags; skip and switch away from accounts whose token is rejected + tests — inline — commit: 3379447
-- T11 (S7, L11) on a limit/refused-token failure switch and reword it so Pi auto-retries on the new account + tests — inline — commit: see L12
-- T12 (S6, L11) switch from after_provider_response mid-run; attribute usage to the running process's account + tests — inline — commit: see L12
-- T13 (S6,S7, L12) verify findings: runAccount after other retried errors and renames, no retry promised past Pi's budget, more limit wordings, subagents keep the user's own exported token + tests — inline — commit: see L12
+- T11 (S7, L11) on a limit/refused-token failure switch and reword it so Pi auto-retries on the new account + tests — inline — commit: 792890c
+- T12 (S6, L11) switch from after_provider_response mid-run; attribute usage to the running process's account + tests — inline — commit: 792890c
+- T13 (S6,S7, L12) verify findings: runAccount after other retried errors and renames, no retry promised past Pi's budget, more limit wordings, subagents keep the user's own exported token + tests — inline — commit: 792890c
 
 ## Log
 L1: Vamos criar agora um plugin... extensão aqui para o Pi... várias contas minhas do Claude Code. Quando chegar 95% do limite de 5 horas, automaticamente troca para outra conta... Sem pedir confirmação... Pode até botar um aviso aqui no Pi que foi trocado... uso o CloudBridge... analisar o CloudBridge.
