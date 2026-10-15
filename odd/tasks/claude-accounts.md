@@ -19,7 +19,7 @@ Bridge facts: CLI spawned per prompt, inherits process.env; CLAUDE_CODE_OAUTH_TO
 - T7 (S2, L5) probe other accounts (prefetch at 85%, menu refresh) + tests — inline — commit: 9621112
 - T8 (L6) store re-read before every write, atomic rename + tests — inline — commit: 0617976
 - T9 (L6) footer status: active account + 5h usage + tests — inline — commit: 209edfd
-- T10 (L6) lighter probe flags; skip and switch away from accounts whose token is rejected + tests — inline — commit: pending
+- T10 (L6) lighter probe flags; skip and switch away from accounts whose token is rejected + tests — inline — commit: 3379447
 
 ## Log
 L1: Vamos criar agora um plugin... extensão aqui para o Pi... várias contas minhas do Claude Code. Quando chegar 95% do limite de 5 horas, automaticamente troca para outra conta... Sem pedir confirmação... Pode até botar um aviso aqui no Pi que foi trocado... uso o CloudBridge... analisar o CloudBridge.
