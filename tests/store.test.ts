@@ -56,3 +56,26 @@ test("tokens already stored with whitespace are repaired on load", () => {
 	writeFileSync(p, JSON.stringify({ active: "work", accounts: [{ name: "default" }, { name: "work", token: "sk-ant-oat01-ab cd" }] }));
 	assert.equal(loadStore(p).accounts[1].token, "sk-ant-oat01-abcd");
 });
+
+test("updateStore re-reads the file, so two Pi instances do not overwrite each other", async () => {
+	const { updateStore } = await import("../src/store.ts");
+	const p = tmp();
+	saveStore(p, addAccount(loadStore(p), "work", "t"));
+	const staleCopyOfA = loadStore(p); // instance A loaded earlier
+	updateStore(p, (s) => ({ ...s, accounts: s.accounts.map((a) => (a.name === "work" ? { ...a, usage: { utilization: 0.5 } } : a)) })); // instance B
+	updateStore(p, (s) => ({ ...s, active: "work" })); // instance A, never touching its stale copy
+	const back = loadStore(p);
+	assert.equal(back.active, "work");
+	assert.deepEqual(back.accounts[1].usage, { utilization: 0.5 });
+	assert.equal(staleCopyOfA.active, "default");
+});
+
+test("updateStore writes atomically with mode 0600 and leaves no temp file", async () => {
+	const { updateStore } = await import("../src/store.ts");
+	const { readdirSync } = await import("node:fs");
+	const { dirname } = await import("node:path");
+	const p = tmp();
+	updateStore(p, (s) => addAccount(s, "work", "t"));
+	assert.equal(statSync(p).mode & 0o777, 0o600);
+	assert.deepEqual(readdirSync(dirname(p)), ["claude-accounts.json"]);
+});

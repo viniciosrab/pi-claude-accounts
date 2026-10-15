@@ -8,7 +8,7 @@ import { completeArgs } from "./completions.ts";
 import { parseFiveHour } from "./headers.ts";
 import { effectiveUtilization, pickAccount, type Usage } from "./policy.ts";
 import { PREFETCH_AT, probeAccount, staleAccounts } from "./probe.ts";
-import { addAccount, DEFAULT_ACCOUNT, loadStore, removeAccount, saveStore, type Store } from "./store.ts";
+import { addAccount, DEFAULT_ACCOUNT, loadStore, removeAccount, updateStore, type Store } from "./store.ts";
 
 const ENV = "CLAUDE_CODE_OAUTH_TOKEN";
 const PROVIDER = "claude-bridge";
@@ -20,13 +20,9 @@ const now = () => Math.floor(Date.now() / 1000);
 
 export default function (pi: ExtensionAPI) {
 	const externalToken = process.env[ENV]; // what "default" means when the user exported one themselves
-	let store: Store | undefined;
-
-	const load = (): Store => (store ??= loadStore(storePath()));
-	const persist = (next: Store) => {
-		store = next;
-		saveStore(storePath(), next);
-	};
+	// No in-memory copy: other Pi instances write the same file, so every read and write goes to disk.
+	const load = (): Store => loadStore(storePath());
+	const update = (change: (s: Store) => Store): Store => updateStore(storePath(), change);
 	const applyActive = () => {
 		const s = load();
 		const token = s.accounts.find((a) => a.name === s.active)?.token ?? externalToken;
@@ -41,8 +37,7 @@ export default function (pi: ExtensionAPI) {
 
 	// Always merges into the latest store: probes finish in the background, after other writes.
 	const setUsage = (name: string, usage: Usage) => {
-		const s = load();
-		persist({ ...s, accounts: s.accounts.map((a) => (a.name === name ? { ...a, usage } : a)) });
+		update((s) => ({ ...s, accounts: s.accounts.map((a) => (a.name === name ? { ...a, usage } : a)) }));
 	};
 
 	let probing: Promise<number> | undefined;
@@ -94,7 +89,7 @@ export default function (pi: ExtensionAPI) {
 			if (!pick.switched) return applyActive();
 			const from = s.accounts.find((a) => a.name === s.active)!;
 			const to = s.accounts.find((a) => a.name === pick.name)!;
-			persist({ ...s, active: pick.name });
+			update((latest) => ({ ...latest, active: pick.name }));
 			applyActive();
 			ctx.ui.notify(
 				`Claude account switched: ${from.name} (${pct(effectiveUtilization(from, now()))}) → ${to.name} (${pct(effectiveUtilization(to, now()))})`,
@@ -108,7 +103,7 @@ export default function (pi: ExtensionAPI) {
 		if (!n) return ctx.ui.notify("No name given; nothing added.", "info");
 		const t = (token ?? (await ctx.ui.input(`Token for "${n}" (run \`claude setup-token\` logged in to that account)`, "sk-ant-oat01-...")))?.trim();
 		if (!t) return ctx.ui.notify("No token given; nothing added.", "info");
-		persist(addAccount(load(), n, t));
+		update((s) => addAccount(s, n, t));
 		ctx.ui.notify(`Account "${n}" added.`, "info");
 	};
 	const useFlow = async (ctx: ExtensionContext, name?: string) => {
@@ -116,7 +111,7 @@ export default function (pi: ExtensionAPI) {
 		const n = name ?? (await pickName(ctx, "Switch to account", s.accounts.map((a) => a.name)));
 		if (!n) return;
 		if (!s.accounts.some((a) => a.name === n)) return ctx.ui.notify(`Unknown account "${n}".`, "error");
-		persist({ ...s, active: n });
+		update((latest) => ({ ...latest, active: n }));
 		applyActive();
 		ctx.ui.notify(`Active account: ${n}`, "info");
 	};
@@ -127,7 +122,7 @@ export default function (pi: ExtensionAPI) {
 		const n = name ?? (await pickName(ctx, "Remove account", removable));
 		if (!n) return;
 		if (!name && !(await ctx.ui.confirm("Remove account?", `"${n}" and its token will be deleted.`))) return;
-		persist(removeAccount(s, n));
+		update((latest) => removeAccount(latest, n));
 		applyActive();
 		ctx.ui.notify(`Account "${n}" removed.`, "info");
 	};

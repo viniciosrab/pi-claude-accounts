@@ -1,6 +1,6 @@
 // Account persistence. Tokens live in a 0600 file; a corrupt file is never overwritten.
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Usage } from "./policy.ts";
 
@@ -33,8 +33,18 @@ export function loadStore(path: string): Store {
 
 export function saveStore(path: string, store: Store): void {
 	mkdirSync(dirname(path), { recursive: true });
-	writeFileSync(path, `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
-	chmodSync(path, 0o600); // writeFileSync's mode is ignored when the file already exists
+	// Write-then-rename so a concurrent reader (another Pi instance) never sees a half-written file.
+	const tmp = `${path}.${process.pid}.tmp`;
+	writeFileSync(tmp, `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
+	chmodSync(tmp, 0o600); // writeFileSync's mode is ignored when the file already exists
+	renameSync(tmp, path);
+}
+
+/** Read-modify-write against the file, never an in-memory copy: several Pi instances share it. */
+export function updateStore(path: string, change: (store: Store) => Store): Store {
+	const next = change(loadStore(path));
+	saveStore(path, next);
+	return next;
 }
 
 export function addAccount(store: Store, name: string, token: string): Store {
