@@ -79,3 +79,28 @@ test("updateStore writes atomically with mode 0600 and leaves no temp file", asy
 	assert.equal(statSync(p).mode & 0o777, 0o600);
 	assert.deepEqual(readdirSync(dirname(p)), ["claude-accounts.json"]);
 });
+
+test("rename changes the name, follows the active account, and keeps the token", async () => {
+	const { renameAccount } = await import("../src/store.ts");
+	let s = addAccount(loadStore(tmp()), "work", "t");
+	s.active = "work";
+	s = renameAccount(s, "work", "job");
+	assert.equal(s.active, "job");
+	assert.deepEqual(s.accounts[1], { name: "job", token: "t" });
+	assert.throws(() => renameAccount(s, "nope", "x"), /not found/);
+	assert.throws(() => renameAccount(s, "job", DEFAULT_ACCOUNT), /already exists/);
+	assert.throws(() => renameAccount(s, "job", "  "), /empty/);
+});
+
+test("the login account (no token) keeps working under a new name", async () => {
+	const { renameAccount } = await import("../src/store.ts");
+	const p = tmp();
+	saveStore(p, renameAccount(addAccount(loadStore(p), "work", "t"), DEFAULT_ACCOUNT, "vinicios10"));
+	const back = loadStore(p);
+	assert.deepEqual(back.accounts.map((a) => a.name), ["vinicios10", "work"]); // no extra "default" re-created
+	assert.equal(back.active, "vinicios10");
+	assert.throws(() => removeAccount(back, "vinicios10"), /login/);
+	let s = { ...back, active: "work" };
+	s = removeAccount(s, "work");
+	assert.equal(s.active, "vinicios10"); // falls back to the renamed login account
+});

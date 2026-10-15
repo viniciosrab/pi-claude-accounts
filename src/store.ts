@@ -4,8 +4,12 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSy
 import { dirname } from "node:path";
 import type { Usage } from "./policy.ts";
 
-/** The login already stored by Claude Code in ~/.claude/.credentials.json; it carries no token here. */
+/** Initial name of the login already stored by Claude Code in ~/.claude/.credentials.json. That
+ *  account is recognised by having no token, so it can be renamed. */
 export const DEFAULT_ACCOUNT = "default";
+
+export const isLoginAccount = (a: { token?: string }) => !a.token;
+const loginName = (accounts: StoredAccount[]) => accounts.find(isLoginAccount)?.name ?? DEFAULT_ACCOUNT;
 
 export type StoredAccount = { name: string; token?: string; usage?: Usage };
 export type Store = { active: string; accounts: StoredAccount[] };
@@ -26,8 +30,8 @@ export function loadStore(path: string): Store {
 	const accounts = (Array.isArray(parsed.accounts) ? parsed.accounts : []).map((a) =>
 		a.token === undefined ? a : { ...a, token: cleanToken(a.token) },
 	);
-	if (!accounts.some((a) => a.name === DEFAULT_ACCOUNT)) accounts.unshift({ name: DEFAULT_ACCOUNT });
-	const active = accounts.some((a) => a.name === parsed.active) ? parsed.active! : DEFAULT_ACCOUNT;
+	if (!accounts.some(isLoginAccount)) accounts.unshift({ name: DEFAULT_ACCOUNT });
+	const active = accounts.some((a) => a.name === parsed.active) ? parsed.active! : loginName(accounts);
 	return { active, accounts };
 }
 
@@ -53,8 +57,20 @@ export function addAccount(store: Store, name: string, token: string): Store {
 }
 
 export function removeAccount(store: Store, name: string): Store {
-	if (name === DEFAULT_ACCOUNT) throw new Error("the default account cannot be removed");
-	if (!store.accounts.some((a) => a.name === name)) throw new Error(`account "${name}" not found`);
+	const account = store.accounts.find((a) => a.name === name);
+	if (!account) throw new Error(`account "${name}" not found`);
+	if (isLoginAccount(account)) throw new Error(`"${name}" is the Claude Code login and cannot be removed`);
 	const accounts = store.accounts.filter((a) => a.name !== name);
-	return { accounts, active: store.active === name ? DEFAULT_ACCOUNT : store.active };
+	return { accounts, active: store.active === name ? loginName(accounts) : store.active };
+}
+
+export function renameAccount(store: Store, from: string, to: string): Store {
+	const name = to.trim();
+	if (!name) throw new Error("the new name is empty");
+	if (!store.accounts.some((a) => a.name === from)) throw new Error(`account "${from}" not found`);
+	if (store.accounts.some((a) => a.name === name)) throw new Error(`account "${name}" already exists`);
+	return {
+		active: store.active === from ? name : store.active,
+		accounts: store.accounts.map((a) => (a.name === from ? { ...a, name } : a)),
+	};
 }

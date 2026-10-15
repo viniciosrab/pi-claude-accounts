@@ -24,9 +24,9 @@ pi install git:github.com/viniciosrab/pi-claude-accounts   # or a local path in 
 
 ## Usage
 
-Run `/claude-accounts` with no arguments to open a menu: **List accounts**, **Refresh usage**, **Add**, **Switch** or **Remove** account. Add asks for a name, then for a token from `claude setup-token` (run it logged in to the other account). Switch and Remove show each account with its 5h usage; Remove asks for confirmation.
+Run `/claude-accounts` with no arguments to open a menu: **List accounts**, **Refresh usage**, **Add**, **Switch**, **Rename** or **Remove** account. Add asks for a name, then for a token from `claude setup-token` (run it logged in to the other account). Switch and Remove show each account with its 5h usage; Remove asks for confirmation.
 
-The login you already have in Claude Code is the `default` account and cannot be removed.
+The login you already have in Claude Code starts as the `default` account. It cannot be removed, but it can be renamed (e.g. to the account's real name).
 
 Typing `/claude-accounts ` also completes subcommands, and account names after `use` / `remove`:
 
@@ -35,6 +35,7 @@ Typing `/claude-accounts ` also completes subcommands, and account names after `
 /claude-accounts list
 /claude-accounts refresh
 /claude-accounts use work
+/claude-accounts rename default personal
 /claude-accounts remove work
 ```
 

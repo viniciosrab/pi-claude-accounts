@@ -9,12 +9,12 @@ import { parseFiveHour } from "./headers.ts";
 import { effectiveUtilization, pickAccount, type Usage } from "./policy.ts";
 import { isAuthFailure, PREFETCH_AT, probeAccount, staleAccounts } from "./probe.ts";
 import { formatStatus } from "./status.ts";
-import { addAccount, DEFAULT_ACCOUNT, loadStore, removeAccount, updateStore, type Store } from "./store.ts";
+import { addAccount, isLoginAccount, loadStore, removeAccount, renameAccount, updateStore, type Store } from "./store.ts";
 
 const ENV = "CLAUDE_CODE_OAUTH_TOKEN";
 const PROVIDER = "claude-bridge";
 const STATUS_KEY = "claude-accounts";
-const USAGE = "Usage: /claude-accounts add <name> [token] | list | refresh | use <name> | remove <name> | status";
+const USAGE = "Usage: /claude-accounts add <name> [token] | list | refresh | use <name> | rename <name> <new-name> | remove <name> | status";
 
 const storePath = () => join(getAgentDir(), "claude-accounts.json");
 const pct = (n: number) => `${Math.round(n * 100)}%`;
@@ -62,7 +62,7 @@ export default function (pi: ExtensionAPI) {
 			names.map(async (name) => {
 				const account = load().accounts.find((a) => a.name === name);
 				if (!account) return 0;
-				const result = await probeAccount(account.token ?? (name === DEFAULT_ACCOUNT ? externalToken : undefined));
+				const result = await probeAccount(account.token ?? externalToken);
 				if (result.authFailed) patchAccount(name, { authFailed: true });
 				if (!result.usage) return 0;
 				setUsage(name, { ...result.usage, checkedAt: now() });
@@ -174,8 +174,8 @@ export default function (pi: ExtensionAPI) {
 	};
 	const removeFlow = async (ctx: ExtensionContext, name?: string) => {
 		const s = load();
-		const removable = s.accounts.map((a) => a.name).filter((n) => n !== DEFAULT_ACCOUNT);
-		if (!name && removable.length === 0) return ctx.ui.notify("No accounts to remove besides default.", "info");
+		const removable = s.accounts.filter((a) => !isLoginAccount(a)).map((a) => a.name);
+		if (!name && removable.length === 0) return ctx.ui.notify("No accounts to remove besides the Claude Code login.", "info");
 		const n = name ?? (await pickName(ctx, "Remove account", removable));
 		if (!n) return;
 		if (!name && !(await ctx.ui.confirm("Remove account?", `"${n}" and its token will be deleted.`))) return;
@@ -202,11 +202,23 @@ export default function (pi: ExtensionAPI) {
 		ctx.ui.notify(describe(load()) + failed, failed ? "warning" : "info");
 	};
 
-	const MENU = ["List accounts", "Refresh usage", "Add account", "Switch account", "Remove account"] as const;
+	const renameFlow = async (ctx: ExtensionContext, name?: string, newName?: string) => {
+		const n = name ?? (await pickName(ctx, "Rename account", load().accounts.map((a) => a.name)));
+		if (!n) return;
+		const to = (newName ?? (await ctx.ui.input(`New name for "${n}"`, n)))?.trim();
+		if (!to) return ctx.ui.notify("No name given; nothing renamed.", "info");
+		update((latest) => renameAccount(latest, n, to));
+		ctx.ui.notify(`Account "${n}" renamed to "${to}".`, "info");
+	};
+
+	const MENU = ["List accounts", "Refresh usage", "Add account", "Switch account", "Rename account", "Remove account"] as const;
 
 	pi.registerCommand("claude-accounts", {
 		description: "Manage Claude Code accounts (auto-switch at 95% of the 5h limit)",
-		getArgumentCompletions: (prefix: string) => completeArgs(prefix, load().accounts.map((a) => a.name)),
+		getArgumentCompletions: (prefix: string) => {
+			const accounts = load().accounts;
+			return completeArgs(prefix, accounts.map((a) => a.name), accounts.filter((a) => !isLoginAccount(a)).map((a) => a.name));
+		},
 		handler: async (args: string, ctx: ExtensionContext) => {
 			const [cmd, name, token] = args.trim().split(/\s+/).filter(Boolean);
 			try {
@@ -218,6 +230,9 @@ export default function (pi: ExtensionAPI) {
 					case "use":
 					case "Switch account":
 						return await useFlow(ctx, name);
+					case "rename":
+					case "Rename account":
+						return await renameFlow(ctx, name, token);
 					case "remove":
 					case "Remove account":
 						return await removeFlow(ctx, name);

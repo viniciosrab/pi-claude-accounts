@@ -6,12 +6,12 @@ const names = ["default", "work", "personal"];
 const values = (prefix: string) => completeArgs(prefix, names)?.map((c) => c.value) ?? null;
 
 test("empty prefix lists every subcommand", () => {
-	assert.deepEqual(values(""), ["list", "refresh", "add", "use", "remove", "status"]);
+	assert.deepEqual(values(""), ["list", "refresh", "add", "use", "rename", "remove", "status"]);
 });
 
 test("partial subcommand is filtered", () => {
 	assert.deepEqual(values("u"), ["use"]);
-	assert.deepEqual(values("re"), ["refresh", "remove"]);
+	assert.deepEqual(values("re"), ["refresh", "rename", "remove"]);
 	assert.equal(values("zzz"), null);
 });
 
@@ -24,4 +24,9 @@ test("use/remove complete account names; remove hides default", () => {
 test("add and list take no completions after the subcommand", () => {
 	assert.equal(values("add "), null);
 	assert.equal(values("list "), null);
+});
+
+test("rename completes every account name; remove uses the removable list given", () => {
+	assert.deepEqual(completeArgs("rename ", names, ["work"])?.map((c) => c.value), ["rename default", "rename work", "rename personal"]);
+	assert.deepEqual(completeArgs("remove ", names, ["work"])?.map((c) => c.value), ["remove work"]);
 });
