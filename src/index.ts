@@ -4,6 +4,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
+import { completeArgs } from "./completions.ts";
 import { parseFiveHour } from "./headers.ts";
 import { effectiveUtilization, pickAccount } from "./policy.ts";
 import { addAccount, DEFAULT_ACCOUNT, loadStore, removeAccount, saveStore, type Store } from "./store.ts";
@@ -74,33 +75,70 @@ export default function (pi: ExtensionAPI) {
 		});
 	});
 
+	const addFlow = async (ctx: ExtensionContext, name?: string, token?: string) => {
+		const n = (name ?? (await ctx.ui.input("Account name", "e.g. work")))?.trim();
+		if (!n) return ctx.ui.notify("No name given; nothing added.", "info");
+		const t = (token ?? (await ctx.ui.input(`Token for "${n}" (run \`claude setup-token\` logged in to that account)`, "sk-ant-oat01-...")))?.trim();
+		if (!t) return ctx.ui.notify("No token given; nothing added.", "info");
+		persist(addAccount(load(), n, t));
+		ctx.ui.notify(`Account "${n}" added.`, "info");
+	};
+	const useFlow = async (ctx: ExtensionContext, name?: string) => {
+		const s = load();
+		const n = name ?? (await pickName(ctx, "Switch to account", s.accounts.map((a) => a.name)));
+		if (!n) return;
+		if (!s.accounts.some((a) => a.name === n)) return ctx.ui.notify(`Unknown account "${n}".`, "error");
+		persist({ ...s, active: n });
+		applyActive();
+		ctx.ui.notify(`Active account: ${n}`, "info");
+	};
+	const removeFlow = async (ctx: ExtensionContext, name?: string) => {
+		const s = load();
+		const removable = s.accounts.map((a) => a.name).filter((n) => n !== DEFAULT_ACCOUNT);
+		if (!name && removable.length === 0) return ctx.ui.notify("No accounts to remove besides default.", "info");
+		const n = name ?? (await pickName(ctx, "Remove account", removable));
+		if (!n) return;
+		if (!name && !(await ctx.ui.confirm("Remove account?", `"${n}" and its token will be deleted.`))) return;
+		persist(removeAccount(s, n));
+		applyActive();
+		ctx.ui.notify(`Account "${n}" removed.`, "info");
+	};
+	// Menu labels carry the usage so the choice is informed; map back to the bare name.
+	const pickName = async (ctx: ExtensionContext, title: string, names: string[]) => {
+		const s = load();
+		const label = (n: string) => {
+			const a = s.accounts.find((x) => x.name === n)!;
+			return `${n === s.active ? "* " : "  "}${n}  (5h: ${a.usage ? pct(effectiveUtilization(a, now())) : "n/a"})`;
+		};
+		const choice = await ctx.ui.select(title, names.map(label));
+		return choice === undefined ? undefined : names[names.map(label).indexOf(choice)];
+	};
+
+	const MENU = ["List accounts", "Add account", "Switch account", "Remove account"] as const;
+
 	pi.registerCommand("claude-accounts", {
 		description: "Manage Claude Code accounts (auto-switch at 95% of the 5h limit)",
+		getArgumentCompletions: (prefix: string) => completeArgs(prefix, load().accounts.map((a) => a.name)),
 		handler: async (args: string, ctx: ExtensionContext) => {
-			const [cmd, name, token] = args.trim().split(/\s+/);
+			const [cmd, name, token] = args.trim().split(/\s+/).filter(Boolean);
 			try {
-				const s = load();
-				switch (cmd) {
-					case "add": {
-						if (!name) return ctx.ui.notify(USAGE, "info");
-						const t = token ?? (await ctx.ui.input("Token from `claude setup-token`", "sk-ant-oat01-..."));
-						if (!t?.trim()) return ctx.ui.notify("No token given; nothing added.", "info");
-						persist(addAccount(s, name, t.trim()));
-						return ctx.ui.notify(`Account "${name}" added.`, "info");
-					}
-					case "remove":
-						if (!name) return ctx.ui.notify(USAGE, "info");
-						persist(removeAccount(s, name));
-						applyActive();
-						return ctx.ui.notify(`Account "${name}" removed.`, "info");
+				const action = cmd ?? (await ctx.ui.select("Claude accounts", [...MENU]));
+				switch (action) {
+					case "add":
+					case "Add account":
+						return await addFlow(ctx, name, token);
 					case "use":
-						if (!name || !s.accounts.some((a) => a.name === name)) return ctx.ui.notify(`Unknown account. ${USAGE}`, "error");
-						persist({ ...s, active: name });
-						applyActive();
-						return ctx.ui.notify(`Active account: ${name}`, "info");
+					case "Switch account":
+						return await useFlow(ctx, name);
+					case "remove":
+					case "Remove account":
+						return await removeFlow(ctx, name);
 					case "list":
 					case "status":
-						return ctx.ui.notify(describe(s), "info");
+					case "List accounts":
+						return ctx.ui.notify(describe(load()), "info");
+					case undefined:
+						return;
 					default:
 						return ctx.ui.notify(USAGE, "info");
 				}

@@ -19,12 +19,15 @@ pi install /path/to/pi-claude-accounts   # or add the path to "packages" in ~/.p
 
 ## Usage
 
-The login you already have in Claude Code is the `default` account. Add more with a token from `claude setup-token` (run it logged in to the other account):
+Run `/claude-accounts` with no arguments to open a menu: **List**, **Add**, **Switch** or **Remove** account. Add asks for a name, then for a token from `claude setup-token` (run it logged in to the other account). Switch and Remove show each account with its 5h usage; Remove asks for confirmation.
+
+The login you already have in Claude Code is the `default` account and cannot be removed.
+
+Typing `/claude-accounts ` also completes subcommands, and account names after `use` / `remove`:
 
 ```
-/claude-accounts add work            # prompts for the token
-/claude-accounts add work <token>
-/claude-accounts list                # * marks the active account, with 5h usage
+/claude-accounts add work [token]
+/claude-accounts list
 /claude-accounts use work
 /claude-accounts remove work
 ```
