@@ -4,7 +4,8 @@ export const THRESHOLD = 0.95;
 
 /** `checkedAt` (Unix seconds) is when the numbers were observed; absent on data saved by older versions. */
 export type Usage = { utilization: number; resetsAt?: number; checkedAt?: number };
-export type Account = { name: string; usage?: Usage };
+/** `authFailed`: Claude Code rejected the token; cleared by the next successful response or check. */
+export type Account = { name: string; usage?: Usage; authFailed?: boolean };
 export type Pick = { name: string; switched: boolean };
 
 /** Utilization of the 5h window; a window that already reset counts as empty. */
@@ -19,13 +20,14 @@ export function effectiveUtilization(account: Account, now: number): number {
 export function pickAccount(accounts: Account[], activeName: string, now: number, threshold = THRESHOLD): Pick {
 	const active = accounts.find((a) => a.name === activeName) ?? accounts[0];
 	if (!active) return { name: activeName, switched: false };
-	if (effectiveUtilization(active, now) < threshold) return { name: active.name, switched: active.name !== activeName };
+	const usable = (a: Account) => !a.authFailed;
+	if (usable(active) && effectiveUtilization(active, now) < threshold) return { name: active.name, switched: active.name !== activeName };
 
-	const next = accounts.find((a) => a.name !== active.name && effectiveUtilization(a, now) < threshold);
+	const next = accounts.find((a) => a.name !== active.name && usable(a) && effectiveUtilization(a, now) < threshold);
 	if (next) return { name: next.name, switched: true };
 
-	// Everyone is exhausted: wait on whichever resets first.
+	// Everyone usable is exhausted: wait on whichever resets first.
 	const resetOf = (a: Account) => a.usage?.resetsAt ?? Number.POSITIVE_INFINITY;
-	const soonest = accounts.reduce((best, a) => (resetOf(a) < resetOf(best) ? a : best), active);
+	const soonest = accounts.filter(usable).reduce((best, a) => (resetOf(a) < resetOf(best) ? a : best), active);
 	return { name: soonest.name, switched: soonest.name !== activeName };
 }

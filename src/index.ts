@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { completeArgs } from "./completions.ts";
 import { parseFiveHour } from "./headers.ts";
 import { effectiveUtilization, pickAccount, type Usage } from "./policy.ts";
-import { PREFETCH_AT, probeAccount, staleAccounts } from "./probe.ts";
+import { isAuthFailure, PREFETCH_AT, probeAccount, staleAccounts } from "./probe.ts";
 import { formatStatus } from "./status.ts";
 import { addAccount, DEFAULT_ACCOUNT, loadStore, removeAccount, updateStore, type Store } from "./store.ts";
 
@@ -32,15 +32,28 @@ export default function (pi: ExtensionAPI) {
 		else delete process.env[ENV];
 	};
 	const age = (u: Usage) => (u.checkedAt === undefined ? "" : ` (checked ${Math.max(0, Math.round((now() - u.checkedAt) / 60))}m ago)`);
+	const REJECTED = "token rejected, re-add it";
 	const describe = (s: Store) =>
 		s.accounts
-			.map((a) => `${a.name === s.active ? "*" : " "} ${a.name}  5h: ${a.usage ? pct(effectiveUtilization(a, now())) + age(a.usage) : "n/a"}`)
+			.map((a) => {
+				const usage = a.usage ? pct(effectiveUtilization(a, now())) + age(a.usage) : "n/a";
+				return `${a.name === s.active ? "*" : " "} ${a.name}  5h: ${usage}${a.authFailed ? `  [${REJECTED}]` : ""}`;
+			})
 			.join("\n");
 
 	// Always merges into the latest store: probes finish in the background, after other writes.
-	const setUsage = (name: string, usage: Usage) => {
-		update((s) => ({ ...s, accounts: s.accounts.map((a) => (a.name === name ? { ...a, usage } : a)) }));
+	const patchAccount = (name: string, patch: { usage?: Usage; authFailed?: boolean }) => {
+		update((s) => ({
+			...s,
+			accounts: s.accounts.map((a) => {
+				if (a.name !== name) return a;
+				const { authFailed: _, ...rest } = { ...a, ...patch };
+				return (patch.authFailed ?? a.authFailed) ? { ...rest, authFailed: true } : rest;
+			}),
+		}));
 	};
+	// Fresh usage proves the token works.
+	const setUsage = (name: string, usage: Usage) => patchAccount(name, { usage, authFailed: false });
 
 	let probing: Promise<number> | undefined;
 	/** Probes the given accounts concurrently and records what they report; returns how many answered. */
@@ -49,9 +62,10 @@ export default function (pi: ExtensionAPI) {
 			names.map(async (name) => {
 				const account = load().accounts.find((a) => a.name === name);
 				if (!account) return 0;
-				const usage = await probeAccount(account.token ?? (name === DEFAULT_ACCOUNT ? externalToken : undefined));
-				if (!usage) return 0;
-				setUsage(name, { ...usage, checkedAt: now() });
+				const result = await probeAccount(account.token ?? (name === DEFAULT_ACCOUNT ? externalToken : undefined));
+				if (result.authFailed) patchAccount(name, { authFailed: true });
+				if (!result.usage) return 0;
+				setUsage(name, { ...result.usage, checkedAt: now() });
 				return 1;
 			}),
 		)
@@ -96,6 +110,29 @@ export default function (pi: ExtensionAPI) {
 		});
 	});
 
+	// A refused token fails the prompt; mark the account and move on now so the resend works.
+	pi.on("message_end", (event, ctx) => {
+		const msg = event.message as { role?: string; provider?: string; stopReason?: string; errorMessage?: string };
+		if (msg.role !== "assistant" || msg.provider !== PROVIDER || msg.stopReason !== "error" || !isAuthFailure(msg.errorMessage)) return;
+		safe(ctx, () => {
+			const failed = load().active;
+			patchAccount(failed, { authFailed: true });
+			const s = load();
+			const pick = pickAccount(s.accounts, s.active, now());
+			if (pick.switched) {
+				update((latest) => ({ ...latest, active: pick.name }));
+				applyActive();
+			}
+			showStatus(ctx);
+			ctx.ui.notify(
+				pick.switched
+					? `Claude account "${failed}": ${REJECTED}. Switched to "${pick.name}"; send your message again.`
+					: `Claude account "${failed}": ${REJECTED}. No other account is available.`,
+				"error",
+			);
+		});
+	});
+
 	// Switch only between prompts, never mid-response: the CLI of a running prompt keeps its account.
 	pi.on("before_agent_start", (_event, ctx) => {
 		if (ctx.model && ctx.model.provider !== PROVIDER) return;
@@ -129,6 +166,8 @@ export default function (pi: ExtensionAPI) {
 		const n = name ?? (await pickName(ctx, "Switch to account", s.accounts.map((a) => a.name)));
 		if (!n) return;
 		if (!s.accounts.some((a) => a.name === n)) return ctx.ui.notify(`Unknown account "${n}".`, "error");
+		// Choosing an account by hand is a request to retry it, so forget an earlier rejection.
+		patchAccount(n, { authFailed: false });
 		update((latest) => ({ ...latest, active: n }));
 		applyActive();
 		ctx.ui.notify(`Active account: ${n}`, "info");
@@ -149,7 +188,7 @@ export default function (pi: ExtensionAPI) {
 		const s = load();
 		const label = (n: string) => {
 			const a = s.accounts.find((x) => x.name === n)!;
-			return `${n === s.active ? "* " : "  "}${n}  (5h: ${a.usage ? pct(effectiveUtilization(a, now())) : "n/a"})`;
+			return `${n === s.active ? "* " : "  "}${n}  (5h: ${a.usage ? pct(effectiveUtilization(a, now())) : "n/a"})${a.authFailed ? `  [${REJECTED}]` : ""}`;
 		};
 		const choice = await ctx.ui.select(title, names.map(label));
 		return choice === undefined ? undefined : names[names.map(label).indexOf(choice)];

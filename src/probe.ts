@@ -12,6 +12,33 @@ export const PROBE_TTL = 600;
 export const PREFETCH_AT = 0.85;
 const TIMEOUT_MS = 90_000;
 
+/** One-character Haiku prompt with everything optional switched off (hooks, MCP, tools, skills,
+ *  session files): ~1.8s instead of ~9s. `--bare` would be lighter but never reads OAuth tokens. */
+export const PROBE_ARGS: readonly string[] = [
+	"-p", ".", "--model", "haiku", "--output-format", "stream-json", "--verbose",
+	"--setting-sources=", "--strict-mcp-config", "--tools=", "--no-session-persistence", "--disable-slash-commands",
+];
+
+const AUTH_FAILURE = /failed to authenticate|not logged in|oauth (access )?token (is invalid|has been revoked|has expired)|\b401\b/i;
+
+/** True for the messages Claude Code gives when it refuses a token (as relayed by claude-bridge). */
+export function isAuthFailure(message: string | undefined): boolean {
+	return message !== undefined && AUTH_FAILURE.test(message);
+}
+
+/** Whether a probe ended because the token was refused. */
+export function probeAuthFailed(stdout: string): boolean {
+	for (const line of stdout.split("\n")) {
+		try {
+			const msg = JSON.parse(line);
+			if (msg?.type === "result" && msg.is_error && isAuthFailure(String(msg.result ?? ""))) return true;
+		} catch {}
+	}
+	return false;
+}
+
+export type ProbeResult = { usage?: Usage; authFailed: boolean };
+
 export function parseProbeOutput(stdout: string): Usage | undefined {
 	let found: Usage | undefined;
 	for (const line of stdout.split("\n")) {
@@ -39,13 +66,13 @@ export function staleAccounts<A extends Account>(accounts: A[], activeName: stri
 }
 
 /** `token` undefined means the login in ~/.claude/.credentials.json. */
-export function probeAccount(token: string | undefined, executable = "claude"): Promise<Usage | undefined> {
+export function probeAccount(token: string | undefined, executable = "claude"): Promise<ProbeResult> {
 	const env = { ...process.env };
 	if (token) env.CLAUDE_CODE_OAUTH_TOKEN = token;
 	else delete env.CLAUDE_CODE_OAUTH_TOKEN;
 	return new Promise((resolve) => {
 		let out = "";
-		const child = spawn(executable, ["-p", ".", "--model", "haiku", "--output-format", "stream-json", "--verbose"], {
+		const child = spawn(executable, [...PROBE_ARGS], {
 			cwd: tmpdir(),
 			env,
 			stdio: ["ignore", "pipe", "ignore"],
@@ -54,11 +81,11 @@ export function probeAccount(token: string | undefined, executable = "claude"): 
 		child.stdout.on("data", (chunk) => (out += chunk));
 		child.on("error", () => {
 			clearTimeout(timer);
-			resolve(undefined);
+			resolve({ authFailed: false });
 		});
 		child.on("close", () => {
 			clearTimeout(timer);
-			resolve(parseProbeOutput(out));
+			resolve({ usage: parseProbeOutput(out), authFailed: probeAuthFailed(out) });
 		});
 	});
 }

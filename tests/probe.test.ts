@@ -35,3 +35,24 @@ test("stale = other accounts never checked or checked longer than the TTL ago, s
 test("prefetch starts before the switch threshold", () => {
 	assert.ok(PREFETCH_AT < 0.95 && PREFETCH_AT >= 0.8);
 });
+
+import { isAuthFailure, PROBE_ARGS, probeAuthFailed } from "../src/probe.ts";
+
+test("recognizes the auth failures claude-bridge and Claude Code report", () => {
+	assert.ok(isAuthFailure("Failed to authenticate. API Error: 401 OAuth access token is invalid."));
+	assert.ok(isAuthFailure("Not logged in · Please run /login"));
+	assert.ok(isAuthFailure("API Error: 403 OAuth token has been revoked"));
+	assert.equal(isAuthFailure("Claude quota exceeded — rate limit (five_hour): You've hit your session limit"), false);
+	assert.equal(isAuthFailure(undefined), false);
+});
+
+test("a probe whose result is an auth failure is flagged", () => {
+	const out = JSON.stringify({ type: "result", is_error: true, result: "Not logged in · Please run /login" });
+	assert.equal(probeAuthFailed(out), true);
+	assert.equal(probeAuthFailed(JSON.stringify({ type: "result", is_error: false, result: "ok" })), false);
+});
+
+test("the probe skips hooks, MCP, tools, skills and session files", () => {
+	for (const flag of ["--setting-sources=", "--strict-mcp-config", "--tools=", "--no-session-persistence", "--disable-slash-commands"])
+		assert.ok(PROBE_ARGS.includes(flag), flag);
+});
