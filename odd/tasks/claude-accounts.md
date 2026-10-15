@@ -10,8 +10,8 @@ Bridge facts: CLI spawned per prompt, inherits process.env; CLAUDE_CODE_OAUTH_TO
 - S5: "Enquanto eu for usando Se não tiver batido O limite ... Ele vai continuar na conta" — stay on the current account below threshold.
 
 ## Tasks
-- T1 (S2,S5) pure policy pickAccount + tests — inline — commit: pending
-- T2 (S4) store (0600) + tests — inline — commit: pending
+- T1 (S2,S5) pure policy pickAccount + tests — inline — commit: e66b3ed
+- T2 (S4) store (0600) + tests — inline — commit: 0a2aef6
 - T3 (S1,S3,S4) extension wiring: usage capture, env switch, notify, commands — inline — commit: pending
 - T4 docs README — inline — commit: pending
 
