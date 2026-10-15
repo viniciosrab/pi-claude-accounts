@@ -8,6 +8,7 @@ claude-bridge spawns a fresh Claude Code CLI per prompt and hands it Pi's enviro
 
 - Switches only between prompts, never mid-response, with no confirmation, and shows a notice: `Claude account switched: a (96%) → b (12%)`.
 - Below 95% it stays on the current account. A window whose reset time has passed counts as 0%.
+- `/claude-accounts list` shows each account's 5h usage and the time left until its window resets, e.g. `63%, resets in 4h 27m`.
 - If every account is at the limit it waits on the one that resets first.
 - Usage of an inactive account is unknown until checked. When the active account passes **85%**, the other accounts whose data is missing or older than 10 minutes are checked in the background, so the switch at 95% never lands on an exhausted account. **Refresh usage** in the menu (or `/claude-accounts refresh`) checks all accounts on demand.
 - A check runs Claude Code with a one-character Haiku prompt and hooks, MCP servers, tools, skills and session files switched off (setup-token tokens are refused by the usage endpoint). It takes about 2s and uses a tiny part of each account's limit.

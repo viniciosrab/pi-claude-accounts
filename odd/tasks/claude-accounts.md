@@ -33,3 +33,4 @@ L6: review "oque acha da extensao" -> "go" on: concurrency between Pi instances,
 L7: "so quero que exiba o nome da conta ativa so isso" (footer showed "Claude: default · 5h 23%") — footer now shows only the account name.
 L8: "so mude na extensao para vinicios10 a default" — login account is now recognised by having no token; added rename; renamed default -> vinicios10.
 L9: "tire do rodape ... so preciso ver a mensagem quando a troca ocorrer" — footer status removed; switch and rejected-token notifications kept.
+L10: "precisa colocar quanto tempo falta pro reset do limit de 5 hr" — list shows "resets in Xh Ym".

@@ -5,6 +5,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
 import { completeArgs } from "./completions.ts";
+import { formatReset } from "./format.ts";
 import { parseFiveHour } from "./headers.ts";
 import { effectiveUtilization, pickAccount, type Usage } from "./policy.ts";
 import { isAuthFailure, PREFETCH_AT, probeAccount, staleAccounts } from "./probe.ts";
@@ -34,7 +35,8 @@ export default function (pi: ExtensionAPI) {
 	const describe = (s: Store) =>
 		s.accounts
 			.map((a) => {
-				const usage = a.usage ? pct(effectiveUtilization(a, now())) + age(a.usage) : "n/a";
+				const reset = a.usage ? formatReset(a.usage.resetsAt, now()) : "";
+				const usage = a.usage ? pct(effectiveUtilization(a, now())) + (reset ? `, ${reset}` : "") + age(a.usage) : "n/a";
 				return `${a.name === s.active ? "*" : " "} ${a.name}  5h: ${usage}${a.authFailed ? `  [${REJECTED}]` : ""}`;
 			})
 			.join("\n");
