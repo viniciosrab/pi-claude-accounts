@@ -45,3 +45,14 @@ test("corrupt file is left untouched and reported, not overwritten", () => {
 	assert.throws(() => loadStore(p), /does not parse/);
 	assert.equal(readFileSync(p, "utf-8"), "{ nope");
 });
+
+test("pasted tokens lose every whitespace, including a wrapped line break", () => {
+	const s = addAccount(loadStore(tmp()), "work", "  sk-ant-oat01-ab cd\nef  ");
+	assert.equal(s.accounts[1].token, "sk-ant-oat01-abcdef");
+});
+
+test("tokens already stored with whitespace are repaired on load", () => {
+	const p = tmp();
+	writeFileSync(p, JSON.stringify({ active: "work", accounts: [{ name: "default" }, { name: "work", token: "sk-ant-oat01-ab cd" }] }));
+	assert.equal(loadStore(p).accounts[1].token, "sk-ant-oat01-abcd");
+});
