@@ -6,12 +6,13 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
 import { completeArgs } from "./completions.ts";
 import { parseFiveHour } from "./headers.ts";
-import { effectiveUtilization, pickAccount } from "./policy.ts";
+import { effectiveUtilization, pickAccount, type Usage } from "./policy.ts";
+import { PREFETCH_AT, probeAccount, staleAccounts } from "./probe.ts";
 import { addAccount, DEFAULT_ACCOUNT, loadStore, removeAccount, saveStore, type Store } from "./store.ts";
 
 const ENV = "CLAUDE_CODE_OAUTH_TOKEN";
 const PROVIDER = "claude-bridge";
-const USAGE = "Usage: /claude-accounts add <name> [token] | list | use <name> | remove <name> | status";
+const USAGE = "Usage: /claude-accounts add <name> [token] | list | refresh | use <name> | remove <name> | status";
 
 const storePath = () => join(getAgentDir(), "claude-accounts.json");
 const pct = (n: number) => `${Math.round(n * 100)}%`;
@@ -32,10 +33,33 @@ export default function (pi: ExtensionAPI) {
 		if (token) process.env[ENV] = token;
 		else delete process.env[ENV];
 	};
+	const age = (u: Usage) => (u.checkedAt === undefined ? "" : ` (checked ${Math.max(0, Math.round((now() - u.checkedAt) / 60))}m ago)`);
 	const describe = (s: Store) =>
 		s.accounts
-			.map((a) => `${a.name === s.active ? "*" : " "} ${a.name}  5h: ${a.usage ? pct(effectiveUtilization(a, now())) : "n/a"}`)
+			.map((a) => `${a.name === s.active ? "*" : " "} ${a.name}  5h: ${a.usage ? pct(effectiveUtilization(a, now())) + age(a.usage) : "n/a"}`)
 			.join("\n");
+
+	// Always merges into the latest store: probes finish in the background, after other writes.
+	const setUsage = (name: string, usage: Usage) => {
+		const s = load();
+		persist({ ...s, accounts: s.accounts.map((a) => (a.name === name ? { ...a, usage } : a)) });
+	};
+
+	let probing: Promise<number> | undefined;
+	/** Probes the given accounts concurrently and records what they report; returns how many answered. */
+	const refreshUsage = (names: string[]): Promise<number> =>
+		(probing ??= Promise.all(
+			names.map(async (name) => {
+				const account = load().accounts.find((a) => a.name === name);
+				if (!account) return 0;
+				const usage = await probeAccount(account.token ?? (name === DEFAULT_ACCOUNT ? externalToken : undefined));
+				if (!usage) return 0;
+				setUsage(name, { ...usage, checkedAt: now() });
+				return 1;
+			}),
+		)
+			.then((r) => r.reduce<number>((n, x) => n + x, 0))
+			.finally(() => (probing = undefined)));
 
 	const safe = (ctx: ExtensionContext, fn: () => void) => {
 		try {
@@ -53,7 +77,11 @@ export default function (pi: ExtensionAPI) {
 		if (!usage) return;
 		safe(ctx, () => {
 			const s = load();
-			persist({ ...s, accounts: s.accounts.map((a) => (a.name === s.active ? { ...a, usage } : a)) });
+			setUsage(s.active, { ...usage, checkedAt: now() });
+			// Learn where to go before the switch is due, so it never lands on an exhausted account.
+			if (usage.utilization < PREFETCH_AT || probing) return;
+			const stale = staleAccounts(load().accounts, s.active, now()).map((a) => a.name);
+			if (stale.length) void refreshUsage(stale).catch(() => {});
 		});
 	});
 
@@ -114,7 +142,15 @@ export default function (pi: ExtensionAPI) {
 		return choice === undefined ? undefined : names[names.map(label).indexOf(choice)];
 	};
 
-	const MENU = ["List accounts", "Add account", "Switch account", "Remove account"] as const;
+	const refreshFlow = async (ctx: ExtensionContext) => {
+		const names = load().accounts.map((a) => a.name);
+		ctx.ui.notify(`Checking 5h usage of ${names.length} accounts (about 10s; uses a tiny bit of each limit)...`, "info");
+		const answered = await refreshUsage(names);
+		const failed = answered < names.length ? `\n${names.length - answered} account(s) did not answer; check their tokens.` : "";
+		ctx.ui.notify(describe(load()) + failed, failed ? "warning" : "info");
+	};
+
+	const MENU = ["List accounts", "Refresh usage", "Add account", "Switch account", "Remove account"] as const;
 
 	pi.registerCommand("claude-accounts", {
 		description: "Manage Claude Code accounts (auto-switch at 95% of the 5h limit)",
@@ -133,6 +169,9 @@ export default function (pi: ExtensionAPI) {
 					case "remove":
 					case "Remove account":
 						return await removeFlow(ctx, name);
+					case "refresh":
+					case "Refresh usage":
+						return await refreshFlow(ctx);
 					case "list":
 					case "status":
 					case "List accounts":

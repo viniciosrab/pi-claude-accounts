@@ -6,6 +6,7 @@ export type Completion = { value: string; label: string; description?: string };
 
 export const SUBCOMMANDS: ReadonlyArray<{ name: string; description: string }> = [
 	{ name: "list", description: "Show accounts and 5h usage" },
+	{ name: "refresh", description: "Check the 5h usage of every account now" },
 	{ name: "add", description: "Register a new account" },
 	{ name: "use", description: "Switch to an account now" },
 	{ name: "remove", description: "Delete an account" },

@@ -2,7 +2,8 @@
 
 export const THRESHOLD = 0.95;
 
-export type Usage = { utilization: number; resetsAt?: number };
+/** `checkedAt` (Unix seconds) is when the numbers were observed; absent on data saved by older versions. */
+export type Usage = { utilization: number; resetsAt?: number; checkedAt?: number };
 export type Account = { name: string; usage?: Usage };
 export type Pick = { name: string; switched: boolean };
 

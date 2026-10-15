@@ -16,9 +16,11 @@ Bridge facts: CLI spawned per prompt, inherits process.env; CLAUDE_CODE_OAUTH_TO
 - T4 docs README — inline — commit: e27c33b
 - T5 (S4, L3) TUI menu + / argument completions + tests — inline — commit: f969b33
 - T6 (S4, L4) strip whitespace from pasted/stored tokens + tests — inline — commit: 770a1c3
+- T7 (S2, L5) probe other accounts (prefetch at 85%, menu refresh) + tests — inline — commit: pending
 
 ## Log
 L1: Vamos criar agora um plugin... extensão aqui para o Pi... várias contas minhas do Claude Code. Quando chegar 95% do limite de 5 horas, automaticamente troca para outra conta... Sem pedir confirmação... Pode até botar um aviso aqui no Pi que foi trocado... uso o CloudBridge... analisar o CloudBridge.
 L2: "go" (analysis), "go" (implement; probes confirmed env token wins, event per request, real token works).
 L3: "nao gostei dessa forma pouco pratica tem que ser pela tui do pi" / "tem que criar a opcoes de / para eu poder fazer" — T5: TUI menu + argument completions.
 L4: added 4 accounts; probes showed every pasted token had an embedded space (terminal wrap) -> "Not logged in". T6: strip whitespace on add and on load.
+L5: "corrigir" — check other accounts usage before switching. Usage endpoint and direct API refuse setup-token tokens (401); probe via Claude Code CLI + Haiku works, ~14s for 5 accounts. T7.

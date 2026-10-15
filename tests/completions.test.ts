@@ -6,11 +6,12 @@ const names = ["default", "work", "personal"];
 const values = (prefix: string) => completeArgs(prefix, names)?.map((c) => c.value) ?? null;
 
 test("empty prefix lists every subcommand", () => {
-	assert.deepEqual(values(""), ["list", "add", "use", "remove", "status"]);
+	assert.deepEqual(values(""), ["list", "refresh", "add", "use", "remove", "status"]);
 });
 
 test("partial subcommand is filtered", () => {
 	assert.deepEqual(values("u"), ["use"]);
+	assert.deepEqual(values("re"), ["refresh", "remove"]);
 	assert.equal(values("zzz"), null);
 });
 
