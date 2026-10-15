@@ -19,7 +19,7 @@ claude-bridge spawns a fresh Claude Code CLI per prompt and hands it Pi's enviro
 ## Install
 
 ```
-pi install /path/to/pi-claude-accounts   # or add the path to "packages" in ~/.pi/agent/settings.json
+pi install git:github.com/viniciosrab/pi-claude-accounts   # or a local path in "packages" in ~/.pi/agent/settings.json
 ```
 
 ## Usage
