@@ -8,10 +8,12 @@ import { completeArgs } from "./completions.ts";
 import { parseFiveHour } from "./headers.ts";
 import { effectiveUtilization, pickAccount, type Usage } from "./policy.ts";
 import { PREFETCH_AT, probeAccount, staleAccounts } from "./probe.ts";
+import { formatStatus } from "./status.ts";
 import { addAccount, DEFAULT_ACCOUNT, loadStore, removeAccount, updateStore, type Store } from "./store.ts";
 
 const ENV = "CLAUDE_CODE_OAUTH_TOKEN";
 const PROVIDER = "claude-bridge";
+const STATUS_KEY = "claude-accounts";
 const USAGE = "Usage: /claude-accounts add <name> [token] | list | refresh | use <name> | remove <name> | status";
 
 const storePath = () => join(getAgentDir(), "claude-accounts.json");
@@ -64,7 +66,20 @@ export default function (pi: ExtensionAPI) {
 		}
 	};
 
-	pi.on("session_start", (_event, ctx) => safe(ctx, applyActive));
+	// Footer line; hidden while another provider is selected.
+	const showStatus = (ctx: ExtensionContext, provider = ctx.model?.provider) => {
+		const onBridge = !provider || provider === PROVIDER;
+		ctx.ui.setStatus(STATUS_KEY, onBridge ? formatStatus(load(), now()) : undefined);
+	};
+
+	pi.on("model_select", (event, ctx) => safe(ctx, () => showStatus(ctx, event.model.provider)));
+
+	pi.on("session_start", (_event, ctx) =>
+		safe(ctx, () => {
+			applyActive();
+			showStatus(ctx);
+		}),
+	);
 
 	pi.on("after_provider_response", (event, ctx) => {
 		if (ctx?.model && ctx.model.provider !== PROVIDER) return;
@@ -73,6 +88,7 @@ export default function (pi: ExtensionAPI) {
 		safe(ctx, () => {
 			const s = load();
 			setUsage(s.active, { ...usage, checkedAt: now() });
+			showStatus(ctx);
 			// Learn where to go before the switch is due, so it never lands on an exhausted account.
 			if (usage.utilization < PREFETCH_AT || probing) return;
 			const stale = staleAccounts(load().accounts, s.active, now()).map((a) => a.name);
@@ -86,11 +102,13 @@ export default function (pi: ExtensionAPI) {
 		safe(ctx, () => {
 			const s = load();
 			const pick = pickAccount(s.accounts, s.active, now());
+			showStatus(ctx);
 			if (!pick.switched) return applyActive();
 			const from = s.accounts.find((a) => a.name === s.active)!;
 			const to = s.accounts.find((a) => a.name === pick.name)!;
 			update((latest) => ({ ...latest, active: pick.name }));
 			applyActive();
+			showStatus(ctx);
 			ctx.ui.notify(
 				`Claude account switched: ${from.name} (${pct(effectiveUtilization(from, now()))}) → ${to.name} (${pct(effectiveUtilization(to, now()))})`,
 				"warning",
@@ -178,6 +196,8 @@ export default function (pi: ExtensionAPI) {
 				}
 			} catch (e) {
 				ctx.ui.notify(e instanceof Error ? e.message : String(e), "error");
+			} finally {
+				safe(ctx, () => showStatus(ctx));
 			}
 		},
 	});

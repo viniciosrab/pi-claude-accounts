@@ -17,7 +17,7 @@ Bridge facts: CLI spawned per prompt, inherits process.env; CLAUDE_CODE_OAUTH_TO
 - T5 (S4, L3) TUI menu + / argument completions + tests — inline — commit: f969b33
 - T6 (S4, L4) strip whitespace from pasted/stored tokens + tests — inline — commit: 770a1c3
 - T7 (S2, L5) probe other accounts (prefetch at 85%, menu refresh) + tests — inline — commit: 9621112
-- T8 (L6) store re-read before every write, atomic rename + tests — inline — commit: pending
+- T8 (L6) store re-read before every write, atomic rename + tests — inline — commit: 0617976
 - T9 (L6) footer status: active account + 5h usage + tests — inline — commit: pending
 - T10 (L6) lighter probe flags; skip and switch away from accounts whose token is rejected + tests — inline — commit: pending
 
