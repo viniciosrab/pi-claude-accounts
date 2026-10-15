@@ -4,15 +4,17 @@ Pi extension that registers several Claude Code accounts for [pi-claude-bridge](
 
 ## How it works
 
-claude-bridge spawns a fresh Claude Code CLI per prompt and hands it Pi's environment. Before each prompt this extension sets `CLAUDE_CODE_OAUTH_TOKEN` to the active account's token (the variable takes precedence over `~/.claude/.credentials.json`). Usage comes from the `anthropic-ratelimit-unified-5h-*` headers claude-bridge already emits after every response.
+claude-bridge spawns a Claude Code CLI per run (one process for the whole run, tool calls included) and hands it Pi's environment. This extension sets `CLAUDE_CODE_OAUTH_TOKEN` to the active account's token (the variable takes precedence over `~/.claude/.credentials.json`). Usage comes from the `anthropic-ratelimit-unified-5h-*` headers claude-bridge already emits after every response.
 
-- Switches only between prompts, never mid-response, with no confirmation, and shows a notice: `Claude account switched: a (96%) → b (12%)`.
+- Switches as soon as a response reports 95% or more, also in the middle of a long run, with no confirmation, and shows a notice: `Claude account switched: a (96%) → b (12%)`. Subagents and runs started from then on use the new account.
+- A run already in progress keeps its Claude Code process, and so its account. If that account then hits its limit, the run is not stopped: the extension switches it to the new account and Pi's automatic retry continues the work there (`Claude account "a": limit reached; continuing on "b".`). This needs Pi's auto-retry, which is on by default. Subagents are covered too, since they load this extension. If the run has used up Pi's retries (`retry.maxRetries` in `~/.pi/agent/settings.json`, default 3) or auto-retry is off, the account still switches but the run stops: `... Pi will not retry; send your message again.`
 - Below 95% it stays on the current account. A window whose reset time has passed counts as 0%.
 - `/claude-accounts list` shows each account's 5h usage and the time left until its window resets, e.g. `63%, resets in 4h 27m`.
 - If every account is at the limit it waits on the one that resets first.
 - Usage of an inactive account is unknown until checked. When the active account passes **85%**, the other accounts whose data is missing or older than 10 minutes are checked in the background, so the switch at 95% never lands on an exhausted account. **Refresh usage** in the menu (or `/claude-accounts refresh`) checks all accounts on demand.
 - A check runs Claude Code with a one-character Haiku prompt and hooks, MCP servers, tools, skills and session files switched off (setup-token tokens are refused by the usage endpoint). It takes about 2s and uses a tiny part of each account's limit.
-- If Claude Code rejects the active account's token (revoked, expired, mistyped), that prompt fails, the account is marked `[token rejected, re-add it]` and skipped, and the extension switches at once; send the message again. Choosing the account with **Switch** retries it.
+- If Claude Code rejects the active account's token (revoked, expired, mistyped), the account is marked `[token rejected, re-add it]` and skipped, and the run continues on another account the same way. Choosing the account with **Switch** retries it.
+- If no other account is available, the limit error is left as it is and the run stops.
 - Only the 5-hour window is considered.
 - Several Pi instances can run at once: every change re-reads `claude-accounts.json` and writes it atomically, and all of them follow the same active account.
 
@@ -44,7 +46,7 @@ Tokens are stored in `~/.pi/agent/claude-accounts.json` (mode 0600).
 ## Caveats
 
 - Each switch loses the prompt cache, so the first reply on the new account is slower and costlier.
-- Relies on claude-bridge forwarding Pi's environment to the CLI.
+- Relies on claude-bridge forwarding Pi's environment to the CLI, and on its wording of limit failures (`Claude quota exceeded — rate limit ...`, `You've hit your ... limit`).
 - Rotating subscriptions to get around usage limits may conflict with Anthropic's terms.
 
 ## Development

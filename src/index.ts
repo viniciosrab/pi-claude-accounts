@@ -1,26 +1,40 @@
-// Multiple Claude Code accounts for claude-bridge. The bridge spawns a fresh Claude Code CLI per
-// prompt and passes it process.env, so setting CLAUDE_CODE_OAUTH_TOKEN before a prompt selects the account.
+// Multiple Claude Code accounts for claude-bridge. The bridge spawns a Claude Code CLI per run (kept for
+// its tool calls) and passes it process.env, so CLAUDE_CODE_OAUTH_TOKEN selects the account of each new CLI.
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { completeArgs } from "./completions.ts";
 import { formatReset } from "./format.ts";
 import { parseFiveHour } from "./headers.ts";
-import { effectiveUtilization, pickAccount, type Usage } from "./policy.ts";
+import { exhaustedUsage, isLimitFailure, retryNotice } from "./limit.ts";
+import { effectiveUtilization, pickAccount, THRESHOLD, type Usage } from "./policy.ts";
 import { isAuthFailure, PREFETCH_AT, probeAccount, staleAccounts } from "./probe.ts";
 import { addAccount, isLoginAccount, loadStore, removeAccount, renameAccount, updateStore, type Store } from "./store.ts";
 
 const ENV = "CLAUDE_CODE_OAUTH_TOKEN";
+// What the user exported before any Pi set ENV. Subagent processes inherit the parent's ENV, which is
+// then an account's token, so the first Pi records the original here for the processes it starts.
+const EXTERNAL = "PI_CLAUDE_ACCOUNTS_EXTERNAL_TOKEN";
 const PROVIDER = "claude-bridge";
 const USAGE = "Usage: /claude-accounts add <name> [token] | list | refresh | use <name> | rename <name> <new-name> | remove <name> | status";
 
 const storePath = () => join(getAgentDir(), "claude-accounts.json");
 const pct = (n: number) => `${Math.round(n * 100)}%`;
 const now = () => Math.floor(Date.now() / 1000);
+/** Pi's auto-retry settings (global settings.json; defaults: on, 3 attempts). */
+const retrySettings = () => {
+	let retry: { enabled?: boolean; maxRetries?: number } | undefined;
+	try {
+		retry = JSON.parse(readFileSync(join(getAgentDir(), "settings.json"), "utf-8")).retry;
+	} catch {}
+	return { enabled: retry?.enabled ?? true, maxRetries: retry?.maxRetries ?? 3 };
+};
 
 export default function (pi: ExtensionAPI) {
-	const externalToken = process.env[ENV]; // what "default" means when the user exported one themselves
+	if (process.env[EXTERNAL] === undefined) process.env[EXTERNAL] = process.env[ENV] ?? "";
+	const externalToken = process.env[EXTERNAL] || undefined; // what the login account means when the user exported a token
 	// No in-memory copy: other Pi instances write the same file, so every read and write goes to disk.
 	const load = (): Store => loadStore(storePath());
 	const update = (change: (s: Store) => Store): Store => updateStore(storePath(), change);
@@ -80,59 +94,111 @@ export default function (pi: ExtensionAPI) {
 		}
 	};
 
-	pi.on("session_start", (_event, ctx) => safe(ctx, applyActive));
+	// The account the running Claude Code process was started with. The bridge keeps one process for a
+	// whole run (tool calls included), so after a switch its usage still belongs to the old account.
+	let runAccount: string | undefined;
+	// Failed responses since the last good one; Pi's retry budget counts the same way.
+	let failedResponses = 0;
+	const switchNotice = (s: Store, from: string, to: string) => {
+		const usage = (n: string) => {
+			const a = s.accounts.find((x) => x.name === n);
+			return a ? ` (${pct(effectiveUtilization(a, now()))})` : "";
+		};
+		return `Claude account switched: ${from}${usage(from)} → ${to}${usage(to)}`;
+	};
+
+	pi.on("session_start", (_event, ctx) =>
+		safe(ctx, () => {
+			applyActive();
+			runAccount = load().active;
+		}),
+	);
 
 	pi.on("after_provider_response", (event, ctx) => {
 		if (ctx?.model && ctx.model.provider !== PROVIDER) return;
 		const usage = parseFiveHour(event.headers);
 		if (!usage) return;
 		safe(ctx, () => {
+			const account = runAccount ?? load().active;
+			setUsage(account, { ...usage, checkedAt: now() });
 			const s = load();
-			setUsage(s.active, { ...usage, checkedAt: now() });
+			// Switch now rather than at the next prompt: subagents and any process started from here on
+			// get the new account. This run's process keeps its token; at the limit message_end moves it.
+			if (account === s.active) {
+				const pick = pickAccount(s.accounts, s.active, now());
+				if (pick.switched) {
+					update((latest) => ({ ...latest, active: pick.name }));
+					applyActive();
+					ctx.ui.notify(switchNotice(s, account, pick.name), "warning");
+				}
+			}
 			// Learn where to go before the switch is due, so it never lands on an exhausted account.
 			if (usage.utilization < PREFETCH_AT || probing) return;
-			const stale = staleAccounts(load().accounts, s.active, now()).map((a) => a.name);
+			const stale = staleAccounts(load().accounts, load().active, now()).map((a) => a.name);
 			if (stale.length) void refreshUsage(stale).catch(() => {});
 		});
 	});
 
-	// A refused token fails the prompt; mark the account and move on now so the resend works.
+	// A limit or a refused token fails the run, a subagent's included. Switch accounts and reword the
+	// failure so Pi's auto-retry continues the work on the new account instead of stopping.
 	pi.on("message_end", (event, ctx) => {
 		const msg = event.message as { role?: string; provider?: string; stopReason?: string; errorMessage?: string };
-		if (msg.role !== "assistant" || msg.provider !== PROVIDER || msg.stopReason !== "error" || !isAuthFailure(msg.errorMessage)) return;
-		safe(ctx, () => {
-			const failed = load().active;
-			patchAccount(failed, { authFailed: true });
+		if (msg.role !== "assistant" || msg.provider !== PROVIDER) return;
+		if (msg.stopReason !== "error") {
+			failedResponses = 0;
+			return;
+		}
+		failedResponses++;
+		const authFailed = isAuthFailure(msg.errorMessage);
+		if (!authFailed && !isLimitFailure(msg.errorMessage)) {
+			// A retry of any other error starts a new CLI, which takes the active account.
+			try {
+				runAccount = load().active;
+			} catch {}
+			return;
+		}
+		try {
+			const failed = runAccount ?? load().active;
+			if (authFailed) patchAccount(failed, { authFailed: true });
+			else patchAccount(failed, { usage: exhaustedUsage(load().accounts.find((a) => a.name === failed)?.usage, now()) });
 			const s = load();
-			const pick = pickAccount(s.accounts, s.active, now());
-			if (pick.switched) {
-				update((latest) => ({ ...latest, active: pick.name }));
-				applyActive();
+			// Another process may already have moved on; then the active account is the way out.
+			const to = pickAccount(s.accounts, s.active, now()).name;
+			const target = s.accounts.find((a) => a.name === to);
+			const usable = target && to !== failed && !target.authFailed && effectiveUtilization(target, now()) < THRESHOLD;
+			const why = authFailed ? REJECTED : "limit reached";
+			if (!usable) {
+				ctx.ui.notify(`Claude account "${failed}": ${why}. No other account is available.`, "error");
+				return;
 			}
-			ctx.ui.notify(
-				pick.switched
-					? `Claude account "${failed}": ${REJECTED}. Switched to "${pick.name}"; send your message again.`
-					: `Claude account "${failed}": ${REJECTED}. No other account is available.`,
-				"error",
-			);
-		});
+			// Already switched at 95% (this process or another): only this run still had to move.
+			const alreadyActive = to === s.active && s.active !== failed;
+			if (!alreadyActive) update((latest) => ({ ...latest, active: to }));
+			applyActive();
+			runAccount = to;
+			const retry = retrySettings();
+			const retries = retry.enabled && failedResponses <= retry.maxRetries;
+			const head = alreadyActive ? `Claude account "${failed}": ${why}` : `${switchNotice(s, failed, to)} — "${failed}": ${why}`;
+			ctx.ui.notify(retries ? `${head}; continuing on "${to}".` : `${head}. Pi will not retry; send your message again.`, "warning");
+			if (!retries) return;
+			return { message: { ...event.message, errorMessage: retryNotice(failed, to, why) } as typeof event.message };
+		} catch (e) {
+			ctx.ui.notify(e instanceof Error ? e.message : String(e), "error");
+		}
 	});
 
-	// Switch only between prompts, never mid-response: the CLI of a running prompt keeps its account.
+	// Each run starts its Claude Code process with the account chosen here.
 	pi.on("before_agent_start", (_event, ctx) => {
 		if (ctx.model && ctx.model.provider !== PROVIDER) return;
 		safe(ctx, () => {
 			const s = load();
 			const pick = pickAccount(s.accounts, s.active, now());
+			runAccount = pick.name;
+			failedResponses = 0;
 			if (!pick.switched) return applyActive();
-			const from = s.accounts.find((a) => a.name === s.active)!;
-			const to = s.accounts.find((a) => a.name === pick.name)!;
 			update((latest) => ({ ...latest, active: pick.name }));
 			applyActive();
-			ctx.ui.notify(
-				`Claude account switched: ${from.name} (${pct(effectiveUtilization(from, now()))}) → ${to.name} (${pct(effectiveUtilization(to, now()))})`,
-				"warning",
-			);
+			ctx.ui.notify(switchNotice(s, s.active, pick.name), "warning");
 		});
 	});
 
@@ -191,6 +257,7 @@ export default function (pi: ExtensionAPI) {
 		const to = (newName ?? (await ctx.ui.input(`New name for "${n}"`, n)))?.trim();
 		if (!to) return ctx.ui.notify("No name given; nothing renamed.", "info");
 		update((latest) => renameAccount(latest, n, to));
+		if (runAccount === n) runAccount = to;
 		ctx.ui.notify(`Account "${n}" renamed to "${to}".`, "info");
 	};
 
