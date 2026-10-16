@@ -1,54 +1,48 @@
 # pi-claude-accounts
 
-Pi extension that registers several Claude Code accounts for [pi-claude-bridge](https://github.com/viniciosrab/pi-claude-bridge) and switches automatically when the active account reaches **95% of its 5-hour window**.
-
-## How it works
-
-claude-bridge spawns a Claude Code CLI per run (one process for the whole run, tool calls included) and hands it Pi's environment. This extension sets `CLAUDE_CODE_OAUTH_TOKEN` to the active account's token (the variable takes precedence over `~/.claude/.credentials.json`). Usage comes from the `anthropic-ratelimit-unified-5h-*` headers claude-bridge already emits after every response.
-
-- Switches as soon as a response reports 95% or more, also in the middle of a long run, with no confirmation, and shows a notice: `Claude account switched: a (96%) → b (12%)`. Subagents and runs started from then on use the new account.
-- A run already in progress keeps its Claude Code process, and so its account. If that account then hits its limit, the run is not stopped: the extension switches it to the new account and Pi's automatic retry continues the work there (`Claude account "a": limit reached; continuing on "b".`). This needs Pi's auto-retry, which is on by default. Subagents are covered too, since they load this extension. If the run has used up Pi's retries (`retry.maxRetries` in `~/.pi/agent/settings.json`, default 3) or auto-retry is off, the account still switches but the run stops: `... Pi will not retry; send your message again.`
-- Below 95% it stays on the current account. A window whose reset time has passed counts as 0%.
-- `/claude-accounts list` shows each account's 5h usage and the time left until its window resets, e.g. `63%, resets in 4h 27m`.
-- If every account is at the limit it waits on the one that resets first.
-- Usage of an inactive account is unknown until checked. When the active account passes **85%**, the other accounts whose data is missing or older than 10 minutes are checked in the background, so the switch at 95% never lands on an exhausted account. **Refresh usage** in the menu (or `/claude-accounts refresh`) checks all accounts on demand.
-- A check runs Claude Code with a one-character Haiku prompt and hooks, MCP servers, tools, skills and session files switched off (setup-token tokens are refused by the usage endpoint). It takes about 2s and uses a tiny part of each account's limit.
-- If Claude Code rejects the active account's token (revoked, expired, mistyped), the account is marked `[token rejected, re-add it]` and skipped, and the run continues on another account the same way. Choosing the account with **Switch** retries it.
-- If no other account is available, the limit error is left as it is and the run stops.
-- Only the 5-hour window is considered.
-- Several Pi instances can run at once: every change re-reads `claude-accounts.json` and writes it atomically, and all of them follow the same active account.
+Pi extension that lets [pi-claude-bridge](https://github.com/viniciosrab/pi-claude-bridge) use several Claude Code accounts. When the active account reaches **95% of its 5-hour limit**, it switches to another one on its own, with no confirmation and no interruption to your work.
 
 ## Install
 
 ```
-pi install git:github.com/viniciosrab/pi-claude-accounts   # or a local path in "packages" in ~/.pi/agent/settings.json
+pi install git:github.com/viniciosrab/pi-claude-accounts
 ```
 
-## Usage
+## Set up
 
-Run `/claude-accounts` with no arguments to open a menu: **List accounts**, **Refresh usage**, **Add**, **Switch**, **Rename** or **Remove** account. Add asks for a name, then for a token from `claude setup-token` (run it logged in to the other account). Switch and Remove show each account with its 5h usage; Remove asks for confirmation.
+1. For each extra account, log in to it and run `claude setup-token` to get a token.
+2. In Pi, run `/claude-accounts`, choose **Add account**, and paste the name and token.
 
-The login you already have in Claude Code starts as the `default` account. It cannot be removed, but it can be renamed (e.g. to the account's real name).
+The account you are already logged in with in Claude Code is listed too (as `default`); you can rename it but not remove it.
 
-Typing `/claude-accounts ` also completes subcommands, and account names after `use` / `remove`:
+## Commands
+
+Run `/claude-accounts` for a menu, or use the subcommands (they autocomplete):
 
 ```
-/claude-accounts add work [token]
-/claude-accounts list
-/claude-accounts refresh
-/claude-accounts use work
-/claude-accounts rename default personal
-/claude-accounts remove work
+/claude-accounts list                  # 5h usage and time until reset, per account
+/claude-accounts refresh               # check every account now
+/claude-accounts add <name> [token]
+/claude-accounts use <name>
+/claude-accounts rename <name> <new-name>
+/claude-accounts remove <name>
 ```
 
-Tokens are stored in `~/.pi/agent/claude-accounts.json` (mode 0600).
+## How it works
 
-## Caveats
+- At 95% or more it switches and shows `Claude account switched: a (96%) → b (12%)`. Subagents and new messages use the new account.
+- If a running task hits the limit anyway, it carries on with the new account instead of stopping (`continuing on "b"`). This relies on Pi's auto-retry, which is on by default.
+- Other accounts are checked in the background once the active one passes 85%, so a switch never lands on an exhausted account.
+- A token Claude Code rejects is marked `[token rejected, re-add it]` and skipped. **Switch** to it retries it.
+- If every account is at its limit, it waits on the one that resets first.
+- Only the 5-hour limit is considered. Several Pi windows can run at once and share the same active account.
+
+## Notes
 
 - Each switch loses the prompt cache, so the first reply on the new account is slower and costlier.
-- Relies on claude-bridge forwarding Pi's environment to the CLI, and on its wording of limit failures (`Claude quota exceeded — rate limit ...`, `You've hit your ... limit`).
+- Tokens are stored in `~/.pi/agent/claude-accounts.json` (mode 0600).
 - Rotating subscriptions to get around usage limits may conflict with Anthropic's terms.
 
 ## Development
 
-`npm test` (Node 22.18+ runs the TypeScript tests directly).
+`npm test` (Node 22.18+).
