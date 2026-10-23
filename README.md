@@ -40,6 +40,7 @@ Run `/claude-accounts` for a menu, or use the subcommands (they autocomplete):
 ## Notes
 
 - Each switch loses the prompt cache, so the first reply on the new account is slower and costlier.
+- Every switch is logged to `~/.pi/agent/claude-accounts-switches.jsonl`: both accounts' usage, the context size, and the next three replies on the new account (5h usage and cache tokens), so you can see what a switch cost.
 - Tokens are stored in `~/.pi/agent/claude-accounts.json` (mode 0600).
 - Rotating subscriptions to get around usage limits may conflict with Anthropic's terms.
 

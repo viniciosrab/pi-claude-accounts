@@ -3,7 +3,7 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { completeArgs } from "./completions.ts";
 import { formatReset } from "./format.ts";
@@ -21,6 +21,11 @@ const PROVIDER = "claude-bridge";
 const USAGE = "Usage: /claude-accounts add <name> [token] | list | refresh | use <name> | rename <name> <new-name> | remove <name> | status";
 
 const storePath = () => join(getAgentDir(), "claude-accounts.json");
+// One JSON line per switch and per reply right after it, so what a switch cost can be measured later.
+const logPath = () => join(getAgentDir(), "claude-accounts-switches.jsonl");
+// Replies logged after a switch: the 5h header lags about one reply behind, and the first reply pays
+// for re-caching the conversation on the new account.
+const LOGGED_REPLIES = 3;
 const pct = (n: number) => `${Math.round(n * 100)}%`;
 const now = () => Math.floor(Date.now() / 1000);
 /** Pi's auto-retry settings (global settings.json; defaults: on, 3 attempts). */
@@ -131,6 +136,31 @@ export default function (pi: ExtensionAPI) {
 		};
 		return `Claude account switched: ${from}${usage(from)} → ${to}${usage(to)}`;
 	};
+	const appendLog = (entry: Record<string, unknown>) => {
+		try {
+			appendFileSync(logPath(), `${JSON.stringify({ at: new Date().toISOString(), ...entry })}\n`);
+		} catch {}
+	};
+	const usageNow = (s: Store, name: string) => {
+		const a = s.accounts.find((x) => x.name === name);
+		return a?.usage ? effectiveUtilization(a, now()) : null;
+	};
+	const sessionOf = (ctx: ExtensionContext) => ctx.sessionManager?.getSessionId?.();
+	let afterSwitch: { to: string; left: number } | undefined;
+	const logSwitch = (ctx: ExtensionContext, s: Store, from: string, to: string, reason: string) => {
+		appendLog({
+			event: "switch",
+			reason,
+			session: sessionOf(ctx),
+			cwd: ctx.cwd,
+			contextTokens: ctx.getContextUsage?.()?.tokens ?? null,
+			from,
+			fromUsage: usageNow(s, from),
+			to,
+			toUsage: usageNow(s, to),
+		});
+		afterSwitch = { to, left: LOGGED_REPLIES };
+	};
 
 	pi.on("session_start", (_event, ctx) =>
 		safe(ctx, () => {
@@ -155,6 +185,7 @@ export default function (pi: ExtensionAPI) {
 					if (pick.name !== s.active) update((latest) => ({ ...latest, active: pick.name }));
 					apply(pick.name);
 					ctx.ui.notify(switchNotice(s, account, pick.name), "warning");
+					logSwitch(ctx, s, account, pick.name, "threshold");
 				}
 			}
 			// Learn where to go before the switch is due, so it never lands on an exhausted account.
@@ -171,6 +202,14 @@ export default function (pi: ExtensionAPI) {
 		if (msg.role !== "assistant" || msg.provider !== PROVIDER) return;
 		if (msg.stopReason !== "error") {
 			failedResponses = 0;
+			try {
+				const account = runningAccount();
+				if (afterSwitch && afterSwitch.left > 0 && account === afterSwitch.to) {
+					afterSwitch.left--;
+					const u = (event.message as { usage?: { cacheRead?: number; cacheWrite?: number } }).usage;
+					appendLog({ event: "after-switch", session: sessionOf(ctx), account, usage: usageNow(load(), account), cacheRead: u?.cacheRead, cacheWrite: u?.cacheWrite });
+				}
+			} catch {}
 			return;
 		}
 		failedResponses++;
@@ -201,6 +240,7 @@ export default function (pi: ExtensionAPI) {
 			if (!alreadyActive) update((latest) => ({ ...latest, active: to }));
 			apply(to);
 			setRun(to);
+			logSwitch(ctx, s, failed, to, why);
 			const retry = retrySettings();
 			const retries = retry.enabled && failedResponses <= retry.maxRetries;
 			const head = alreadyActive ? `Claude account "${failed}": ${why}` : `${switchNotice(s, failed, to)} — "${failed}": ${why}`;
@@ -226,6 +266,7 @@ export default function (pi: ExtensionAPI) {
 			if (pick.name !== s.active) update((latest) => ({ ...latest, active: pick.name }));
 			apply(pick.name);
 			ctx.ui.notify(switchNotice(s, own, pick.name), "warning");
+			logSwitch(ctx, s, own, pick.name, "threshold");
 		});
 	});
 

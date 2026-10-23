@@ -1,7 +1,7 @@
 // Drives the extension's event handlers with a stand-in Pi: the account store lives in a temp dir.
 
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -257,4 +257,58 @@ test("a subagent inheriting the parent's account token does not take it for the 
 	writeAccounts("login", { a: 0.1, b: 0.1, login: 0.1 });
 	handlers.session_start({}, ctx);
 	assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+});
+
+const logFile = () => join(dir, "claude-accounts-switches.jsonl");
+const readLog = () => (existsSync(logFile()) ? readFileSync(logFile(), "utf-8").trim().split("\n").map((l) => JSON.parse(l)) : []);
+const reply = (cacheRead: number, cacheWrite: number) => ({
+	message: { role: "assistant", provider: "claude-bridge", stopReason: "stop", content: [], usage: { input: 2, output: 10, cacheRead, cacheWrite } },
+});
+const sessionCtx = { ...ctx, cwd: "/work/p", sessionManager: { getSessionId: () => "s1" }, getContextUsage: () => ({ tokens: 240000, contextWindow: 1000000 }) };
+
+test("a switch is logged with both accounts' usage, the context size and the first replies on the new account", () => {
+	writeAccounts("a", { a: 0.96, b: 0.1 });
+	handlers.session_start({}, sessionCtx);
+	handlers.before_agent_start({}, sessionCtx);
+	handlers.after_provider_response({ headers: headers(0.12) }, sessionCtx);
+	handlers.message_end(reply(25000, 215000), sessionCtx);
+	handlers.after_provider_response({ headers: headers(0.18) }, sessionCtx);
+	handlers.message_end(reply(240000, 500), sessionCtx);
+	const [sw, first, second] = readLog();
+	assert.equal(typeof sw.at, "string");
+	assert.deepEqual(
+		{ ...sw, at: undefined },
+		{ at: undefined, event: "switch", reason: "threshold", session: "s1", cwd: "/work/p", contextTokens: 240000, from: "a", fromUsage: 0.96, to: "b", toUsage: 0.1 },
+	);
+	assert.deepEqual({ ...first, at: undefined }, { at: undefined, event: "after-switch", session: "s1", account: "b", usage: 0.12, cacheRead: 25000, cacheWrite: 215000 });
+	assert.deepEqual({ ...second, at: undefined }, { at: undefined, event: "after-switch", session: "s1", account: "b", usage: 0.18, cacheRead: 240000, cacheWrite: 500 });
+});
+
+test("only the first three replies after a switch are logged", () => {
+	writeAccounts("a", { a: 0.96, b: 0.1 });
+	handlers.session_start({}, sessionCtx);
+	handlers.before_agent_start({}, sessionCtx);
+	for (let i = 0; i < 5; i++) handlers.message_end(reply(1000, 10), sessionCtx);
+	assert.equal(readLog().length, 4);
+});
+
+test("a limit failure logs its switch with the reason", () => {
+	writeAccounts("a", { a: 0.9, b: 0.1 });
+	handlers.session_start({}, ctx);
+	handlers.message_end(failure(BRIDGE_LIMIT), ctx);
+	const [sw] = readLog();
+	assert.equal(sw.reason, "limit reached");
+	assert.equal(sw.from, "a");
+	assert.equal(sw.to, "b");
+	assert.equal(sw.fromUsage, 1);
+	assert.equal(sw.contextTokens, null, "unknown without a context to ask");
+});
+
+test("nothing is logged without a switch", () => {
+	writeAccounts("a", { a: 0.5, b: 0.1 });
+	handlers.session_start({}, sessionCtx);
+	handlers.before_agent_start({}, sessionCtx);
+	handlers.after_provider_response({ headers: headers(0.6) }, sessionCtx);
+	handlers.message_end(reply(1000, 10), sessionCtx);
+	assert.deepEqual(readLog(), []);
 });
