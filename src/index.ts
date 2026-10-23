@@ -43,12 +43,25 @@ export default function (pi: ExtensionAPI) {
 	// no cache to keep. Each Pi session keeps its own: the prompt cache is per account, so
 	// following another instance's switch would re-cache this session's whole conversation.
 	let envAccount: string | undefined;
+	// The account's own token, undefined for the login account: unchanged when another instance renames it.
+	let envToken: string | undefined;
+	const tokenOf = (name: string) => load().accounts.find((a) => a.name === name)?.token;
 	const apply = (name: string) => {
-		const token = load().accounts.find((a) => a.name === name)?.token ?? externalToken;
+		envToken = tokenOf(name);
+		const token = envToken ?? externalToken;
 		if (token) process.env[ENV] = token;
 		else delete process.env[ENV];
 		envAccount = name;
 	};
+	// The current name of an account this process holds: another instance may have renamed it, and its
+	// token finds it again. The login account is the one without a token of its own.
+	const current = (name: string | undefined, token: string | undefined): string | undefined => {
+		if (name === undefined) return undefined;
+		const accounts = load().accounts;
+		if (accounts.some((a) => a.name === name)) return name;
+		return accounts.find((a) => a.token === token)?.name ?? name;
+	};
+	const ownAccount = () => (envAccount = current(envAccount, envToken));
 	const applyActive = () => apply(load().active);
 	const age = (u: Usage) => (u.checkedAt === undefined ? "" : ` (checked ${Math.max(0, Math.round((now() - u.checkedAt) / 60))}m ago)`);
 	const REJECTED = "token rejected, re-add it";
@@ -103,6 +116,12 @@ export default function (pi: ExtensionAPI) {
 	// The account the running Claude Code process was started with. The bridge keeps one process for a
 	// whole run (tool calls included), so after a switch its usage still belongs to the old account.
 	let runAccount: string | undefined;
+	let runToken: string | undefined;
+	const setRun = (name: string) => {
+		runAccount = name;
+		runToken = tokenOf(name);
+	};
+	const runningAccount = () => (runAccount = current(runAccount, runToken));
 	// Failed responses since the last good one; Pi's retry budget counts the same way.
 	let failedResponses = 0;
 	const switchNotice = (s: Store, from: string, to: string) => {
@@ -116,7 +135,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) =>
 		safe(ctx, () => {
 			applyActive();
-			runAccount = load().active;
+			setRun(load().active);
 		}),
 	);
 
@@ -125,12 +144,12 @@ export default function (pi: ExtensionAPI) {
 		const usage = parseFiveHour(event.headers);
 		if (!usage) return;
 		safe(ctx, () => {
-			const account = runAccount ?? load().active;
+			const account = runningAccount() ?? load().active;
 			setUsage(account, { ...usage, checkedAt: now() });
 			const s = load();
 			// Switch now rather than at the next prompt: subagents and any process started from here on
 			// get the new account. This run's process keeps its token; at the limit message_end moves it.
-			if (account === (envAccount ?? s.active)) {
+			if (account === (ownAccount() ?? s.active)) {
 				const pick = pickSessionAccount(s.accounts, account, s.active, now());
 				if (pick.switched) {
 					if (pick.name !== s.active) update((latest) => ({ ...latest, active: pick.name }));
@@ -159,12 +178,12 @@ export default function (pi: ExtensionAPI) {
 		if (!authFailed && !isLimitFailure(msg.errorMessage)) {
 			// A retry of any other error starts a new CLI, which takes this process's account.
 			try {
-				runAccount = envAccount ?? load().active;
+				setRun(ownAccount() ?? load().active);
 			} catch {}
 			return;
 		}
 		try {
-			const failed = runAccount ?? load().active;
+			const failed = runningAccount() ?? load().active;
 			if (authFailed) patchAccount(failed, { authFailed: true });
 			else patchAccount(failed, { usage: exhaustedUsage(load().accounts.find((a) => a.name === failed)?.usage, now()) });
 			const s = load();
@@ -181,7 +200,7 @@ export default function (pi: ExtensionAPI) {
 			const alreadyActive = to === s.active && s.active !== failed;
 			if (!alreadyActive) update((latest) => ({ ...latest, active: to }));
 			apply(to);
-			runAccount = to;
+			setRun(to);
 			const retry = retrySettings();
 			const retries = retry.enabled && failedResponses <= retry.maxRetries;
 			const head = alreadyActive ? `Claude account "${failed}": ${why}` : `${switchNotice(s, failed, to)} — "${failed}": ${why}`;
@@ -199,9 +218,9 @@ export default function (pi: ExtensionAPI) {
 		if (ctx.model && ctx.model.provider !== PROVIDER) return;
 		safe(ctx, () => {
 			const s = load();
-			const own = envAccount ?? s.active;
+			const own = ownAccount() ?? s.active;
 			const pick = pickSessionAccount(s.accounts, own, s.active, now());
-			runAccount = pick.name;
+			setRun(pick.name);
 			failedResponses = 0;
 			if (!pick.switched) return apply(pick.name);
 			if (pick.name !== s.active) update((latest) => ({ ...latest, active: pick.name }));

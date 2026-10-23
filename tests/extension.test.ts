@@ -176,6 +176,22 @@ test("a session left on its own account switches when that account crosses 95%",
 	assert.deepEqual(notices, [{ text: "Claude account switched: a (96%) → b (10%)", level: "warning" }]);
 });
 
+test("a window keeps its account and usage when another window renames it", () => {
+	writeAccounts("a", { a: 0.5, b: 0.1 });
+	handlers.session_start({}, ctx);
+	handlers.before_agent_start({}, ctx);
+	// Another Pi instance renames "a" to "c": same token, new name.
+	const renamed = readStore();
+	renamed.accounts[0].name = "c";
+	renamed.active = "c";
+	writeFileSync(storeFile(), JSON.stringify(renamed));
+	handlers.after_provider_response({ headers: headers(0.6) }, ctx);
+	assert.equal(usageOf("c").utilization, 0.6, "the running process reports for its account under the new name");
+	handlers.before_agent_start({}, ctx);
+	assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, "tok-a", "the next run stays on the same account");
+	assert.deepEqual(notices, [], "a rename is not a switch");
+});
+
 test("below 95% nothing switches (unchanged)", () => {
 	writeAccounts("a", { a: 0.5, b: 0.1 });
 	handlers.session_start({}, ctx);
