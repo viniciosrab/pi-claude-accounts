@@ -152,6 +152,30 @@ test("a new prompt still switches at 95% (unchanged)", () => {
 	assert.deepEqual(notices, [{ text: "Claude account switched: a (96%) → b (10%)", level: "warning" }]);
 });
 
+test("another Pi switching the active account leaves this session on its own account", () => {
+	writeAccounts("a", { a: 0.5, b: 0.1 });
+	handlers.session_start({}, ctx);
+	writeAccounts("b", { a: 0.5, b: 0.1 }); // another Pi instance switched to "b"
+	handlers.before_agent_start({}, ctx);
+	assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, "tok-a", "the next run keeps this session's cache on its account");
+	assert.equal(readStore().active, "b", "the other instance's choice stays the default for new sessions");
+	handlers.after_provider_response({ headers: headers(0.6) }, ctx);
+	assert.equal(usageOf("a").utilization, 0.6);
+	assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, "tok-a");
+	assert.deepEqual(notices, []);
+});
+
+test("a session left on its own account switches when that account crosses 95%", () => {
+	writeAccounts("a", { a: 0.5, b: 0.1 });
+	handlers.session_start({}, ctx);
+	writeAccounts("login", { a: 0.5, b: 0.1 }); // another Pi instance moved to "login", now at 99%
+	handlers.before_agent_start({}, ctx);
+	handlers.after_provider_response({ headers: headers(0.96) }, ctx);
+	assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, "tok-b", "an exhausted default is skipped too");
+	assert.equal(readStore().active, "b");
+	assert.deepEqual(notices, [{ text: "Claude account switched: a (96%) → b (10%)", level: "warning" }]);
+});
+
 test("below 95% nothing switches (unchanged)", () => {
 	writeAccounts("a", { a: 0.5, b: 0.1 });
 	handlers.session_start({}, ctx);
@@ -208,11 +232,10 @@ test("renaming the running account keeps its usage on it", async () => {
 	assert.equal(usageOf("c").utilization, 0.6);
 });
 
-test("a subagent inheriting the parent's account token does not take it for the login account", () => {
+test("a subagent inheriting the parent's account token does not take it for the login account", async () => {
 	writeAccounts("login", { a: 0.1, b: 0.1, login: 0.1 });
 	handlers.session_start({}, ctx); // parent: login account, nothing exported
-	writeAccounts("a", { a: 0.1, b: 0.1, login: 0.1 });
-	handlers.before_agent_start({}, ctx); // parent now runs on "a"
+	await command("use a", ctx); // parent now runs on "a"
 	assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, "tok-a");
 	load(); // a subagent process starts with the parent's environment
 	writeAccounts("login", { a: 0.1, b: 0.1, login: 0.1 });

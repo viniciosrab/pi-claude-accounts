@@ -31,3 +31,12 @@ export function pickAccount(accounts: Account[], activeName: string, now: number
 	const soonest = accounts.filter(usable).reduce((best, a) => (resetOf(a) < resetOf(best) ? a : best), active);
 	return { name: soonest.name, switched: soonest.name !== activeName };
 }
+
+/** One Pi session's account: it stays on `own` while that is usable and under the threshold, since the
+ *  prompt cache is per account and every move re-caches the whole conversation. Once `own` is used up it
+ *  moves where the shared default (`active`) points, or past it when that is used up too. */
+export function pickSessionAccount(accounts: Account[], own: string, active: string, now: number, threshold = THRESHOLD): Pick {
+	if (!pickAccount(accounts, own, now, threshold).switched) return { name: own, switched: false };
+	const to = pickAccount(accounts, active, now, threshold).name;
+	return { name: to, switched: to !== own };
+}

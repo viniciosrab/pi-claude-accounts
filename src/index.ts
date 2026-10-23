@@ -9,7 +9,7 @@ import { completeArgs } from "./completions.ts";
 import { formatReset } from "./format.ts";
 import { parseFiveHour } from "./headers.ts";
 import { exhaustedUsage, isLimitFailure, retryNotice } from "./limit.ts";
-import { effectiveUtilization, pickAccount, THRESHOLD, type Usage } from "./policy.ts";
+import { effectiveUtilization, pickAccount, pickSessionAccount, THRESHOLD, type Usage } from "./policy.ts";
 import { isAuthFailure, PREFETCH_AT, probeAccount, staleAccounts } from "./probe.ts";
 import { addAccount, isLoginAccount, loadStore, removeAccount, renameAccount, updateStore, type Store } from "./store.ts";
 
@@ -38,12 +38,18 @@ export default function (pi: ExtensionAPI) {
 	// No in-memory copy: other Pi instances write the same file, so every read and write goes to disk.
 	const load = (): Store => loadStore(storePath());
 	const update = (change: (s: Store) => Store): Store => updateStore(storePath(), change);
-	const applyActive = () => {
-		const s = load();
-		const token = s.accounts.find((a) => a.name === s.active)?.token ?? externalToken;
+	// The account this process exports, so every Claude Code CLI it starts from here on (the next run, a
+	// retry) runs on it. A subagent Pi starts on the shared active account instead: a new conversation has
+	// no cache to keep. Each Pi session keeps its own: the prompt cache is per account, so
+	// following another instance's switch would re-cache this session's whole conversation.
+	let envAccount: string | undefined;
+	const apply = (name: string) => {
+		const token = load().accounts.find((a) => a.name === name)?.token ?? externalToken;
 		if (token) process.env[ENV] = token;
 		else delete process.env[ENV];
+		envAccount = name;
 	};
+	const applyActive = () => apply(load().active);
 	const age = (u: Usage) => (u.checkedAt === undefined ? "" : ` (checked ${Math.max(0, Math.round((now() - u.checkedAt) / 60))}m ago)`);
 	const REJECTED = "token rejected, re-add it";
 	const describe = (s: Store) =>
@@ -124,11 +130,11 @@ export default function (pi: ExtensionAPI) {
 			const s = load();
 			// Switch now rather than at the next prompt: subagents and any process started from here on
 			// get the new account. This run's process keeps its token; at the limit message_end moves it.
-			if (account === s.active) {
-				const pick = pickAccount(s.accounts, s.active, now());
+			if (account === (envAccount ?? s.active)) {
+				const pick = pickSessionAccount(s.accounts, account, s.active, now());
 				if (pick.switched) {
-					update((latest) => ({ ...latest, active: pick.name }));
-					applyActive();
+					if (pick.name !== s.active) update((latest) => ({ ...latest, active: pick.name }));
+					apply(pick.name);
 					ctx.ui.notify(switchNotice(s, account, pick.name), "warning");
 				}
 			}
@@ -151,9 +157,9 @@ export default function (pi: ExtensionAPI) {
 		failedResponses++;
 		const authFailed = isAuthFailure(msg.errorMessage);
 		if (!authFailed && !isLimitFailure(msg.errorMessage)) {
-			// A retry of any other error starts a new CLI, which takes the active account.
+			// A retry of any other error starts a new CLI, which takes this process's account.
 			try {
-				runAccount = load().active;
+				runAccount = envAccount ?? load().active;
 			} catch {}
 			return;
 		}
@@ -174,7 +180,7 @@ export default function (pi: ExtensionAPI) {
 			// Already switched at 95% (this process or another): only this run still had to move.
 			const alreadyActive = to === s.active && s.active !== failed;
 			if (!alreadyActive) update((latest) => ({ ...latest, active: to }));
-			applyActive();
+			apply(to);
 			runAccount = to;
 			const retry = retrySettings();
 			const retries = retry.enabled && failedResponses <= retry.maxRetries;
@@ -187,18 +193,20 @@ export default function (pi: ExtensionAPI) {
 		}
 	});
 
-	// Each run starts its Claude Code process with the account chosen here.
+	// Each run starts its Claude Code process with the account chosen here: this session's own, unless
+	// it is used up. Another instance moving the shared default does not move this session.
 	pi.on("before_agent_start", (_event, ctx) => {
 		if (ctx.model && ctx.model.provider !== PROVIDER) return;
 		safe(ctx, () => {
 			const s = load();
-			const pick = pickAccount(s.accounts, s.active, now());
+			const own = envAccount ?? s.active;
+			const pick = pickSessionAccount(s.accounts, own, s.active, now());
 			runAccount = pick.name;
 			failedResponses = 0;
-			if (!pick.switched) return applyActive();
-			update((latest) => ({ ...latest, active: pick.name }));
-			applyActive();
-			ctx.ui.notify(switchNotice(s, s.active, pick.name), "warning");
+			if (!pick.switched) return apply(pick.name);
+			if (pick.name !== s.active) update((latest) => ({ ...latest, active: pick.name }));
+			apply(pick.name);
+			ctx.ui.notify(switchNotice(s, own, pick.name), "warning");
 		});
 	});
 
@@ -229,7 +237,9 @@ export default function (pi: ExtensionAPI) {
 		if (!n) return;
 		if (!name && !(await ctx.ui.confirm("Remove account?", `"${n}" and its token will be deleted.`))) return;
 		update((latest) => removeAccount(latest, n));
-		applyActive();
+		// Only a session running on the removed account moves; the others keep theirs.
+		if (envAccount === undefined || !load().accounts.some((a) => a.name === envAccount)) applyActive();
+		else apply(envAccount);
 		ctx.ui.notify(`Account "${n}" removed.`, "info");
 	};
 	// Menu labels carry the usage so the choice is informed; map back to the bare name.
@@ -258,6 +268,7 @@ export default function (pi: ExtensionAPI) {
 		if (!to) return ctx.ui.notify("No name given; nothing renamed.", "info");
 		update((latest) => renameAccount(latest, n, to));
 		if (runAccount === n) runAccount = to;
+		if (envAccount === n) envAccount = to;
 		ctx.ui.notify(`Account "${n}" renamed to "${to}".`, "info");
 	};
 
