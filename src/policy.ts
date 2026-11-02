@@ -16,14 +16,24 @@ export function effectiveUtilization(account: Account, now: number): number {
 	return u.utilization;
 }
 
+const usable = (a: Account) => !a.authFailed;
+
+/** A random account with room, favoring the emptier ones. Sessions that move at the same moment scatter
+ *  instead of queuing on one account, so fewer of them have to move again when it fills up. */
+function spreadAccount(accounts: Account[], skip: string | undefined, now: number, threshold: number, random: () => number): Account | undefined {
+	const room = (a: Account) => threshold - effectiveUtilization(a, now);
+	const open = accounts.filter((a) => a.name !== skip && usable(a) && room(a) > 0);
+	let left = random() * open.reduce((total, a) => total + room(a), 0);
+	return open.find((a) => (left -= room(a)) < 0) ?? open.at(-1);
+}
+
 /** `now` and `resetsAt` are Unix seconds. Switches only when the active account is at/over the threshold. */
-export function pickAccount(accounts: Account[], activeName: string, now: number, threshold = THRESHOLD): Pick {
+export function pickAccount(accounts: Account[], activeName: string, now: number, threshold = THRESHOLD, random = Math.random): Pick {
 	const active = accounts.find((a) => a.name === activeName) ?? accounts[0];
 	if (!active) return { name: activeName, switched: false };
-	const usable = (a: Account) => !a.authFailed;
 	if (usable(active) && effectiveUtilization(active, now) < threshold) return { name: active.name, switched: active.name !== activeName };
 
-	const next = accounts.find((a) => a.name !== active.name && usable(a) && effectiveUtilization(a, now) < threshold);
+	const next = spreadAccount(accounts, active.name, now, threshold, random);
 	if (next) return { name: next.name, switched: true };
 
 	// Everyone usable is exhausted: wait on whichever resets first.
@@ -34,9 +44,16 @@ export function pickAccount(accounts: Account[], activeName: string, now: number
 
 /** One Pi session's account: it stays on `own` while that is usable and under the threshold, since the
  *  prompt cache is per account and every move re-caches the whole conversation. Once `own` is used up it
- *  moves where the shared default (`active`) points, or past it when that is used up too. */
-export function pickSessionAccount(accounts: Account[], own: string, active: string, now: number, threshold = THRESHOLD): Pick {
-	if (!pickAccount(accounts, own, now, threshold).switched) return { name: own, switched: false };
-	const to = pickAccount(accounts, active, now, threshold).name;
-	return { name: to, switched: to !== own };
+ *  moves to another account with room, not to the shared default (`active`), which would send every
+ *  session on `own` to the same place. An `own` that no longer exists falls back to `active`. */
+export function pickSessionAccount(accounts: Account[], own: string, active: string, now: number, threshold = THRESHOLD, random = Math.random): Pick {
+	const from = accounts.some((a) => a.name === own) ? own : active;
+	const { name } = pickAccount(accounts, from, now, threshold, random);
+	return { name, switched: name !== own };
+}
+
+/** Where a conversation with nothing cached yet starts: any account with room, so sessions do not pile up
+ *  on the active one. With no room left it behaves like a switch from `active`. */
+export function pickNewSessionAccount(accounts: Account[], active: string, now: number, threshold = THRESHOLD, random = Math.random): string {
+	return spreadAccount(accounts, undefined, now, threshold, random)?.name ?? pickAccount(accounts, active, now, threshold, random).name;
 }
