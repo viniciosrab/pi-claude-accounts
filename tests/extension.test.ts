@@ -259,6 +259,29 @@ test("a subagent inheriting the parent's account token does not take it for the 
 	assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
 });
 
+test("removing the login account moves the session running on it to the active account", async () => {
+	writeAccounts("login", { a: 0.1, b: 0.1, login: 0.1 });
+	handlers.session_start({}, ctx);
+	await command("remove login", ctx);
+	assert.deepEqual(readStore().accounts.map((a: any) => a.name), ["a", "b"]);
+	assert.equal(readStore().active, "a");
+	assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, "tok-a");
+	assert.equal(notices.at(-1)?.text, 'Account "login" removed.');
+	load(); // a new Pi instance reads the store again
+	assert.deepEqual(readStore().accounts.map((a: any) => a.name), ["a", "b"]);
+});
+
+test("the remove menu offers the login account and says Claude Code stays logged in", async () => {
+	writeAccounts("a", { a: 0.1, b: 0.1, login: 0.1 });
+	let offered: string[] = [];
+	let confirmText = "";
+	const menu = { ...ctx, ui: { ...ctx.ui, select: async (_: string, items: string[]) => ((offered = items), items[2]), confirm: async (_: string, text: string) => ((confirmText = text), true) } };
+	await command("remove", menu);
+	assert.equal(offered.length, 3);
+	assert.equal(confirmText, '"login" is the Claude Code login; it will no longer be listed or used here (Claude Code stays logged in).');
+	assert.deepEqual(readStore().accounts.map((a: any) => a.name), ["a", "b"]);
+});
+
 const logFile = () => join(dir, "claude-accounts-switches.jsonl");
 const readLog = () => (existsSync(logFile()) ? readFileSync(logFile(), "utf-8").trim().split("\n").map((l) => JSON.parse(l)) : []);
 const reply = (cacheRead: number, cacheWrite: number) => ({
@@ -311,4 +334,33 @@ test("nothing is logged without a switch", () => {
 	handlers.after_provider_response({ headers: headers(0.6) }, sessionCtx);
 	handlers.message_end(reply(1000, 10), sessionCtx);
 	assert.deepEqual(readLog(), []);
+});
+
+const withHistory = (entries: { type: string }[]) => ({ ...ctx, sessionManager: { getSessionId: () => "s1", getEntries: () => entries } });
+
+test("a new conversation starts on any account with room and leaves the active one alone", (t) => {
+	t.mock.method(Math, "random", () => 0.99);
+	writeAccounts("a", { a: 0.1, b: 0.1 });
+	handlers.session_start({}, withHistory([{ type: "model_change" }]));
+	assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, "tok-b");
+	assert.equal(readStore().active, "a");
+});
+
+test("a reopened conversation still starts on the active account", (t) => {
+	t.mock.method(Math, "random", () => 0.99);
+	writeAccounts("a", { a: 0.1, b: 0.1 });
+	handlers.session_start({}, withHistory([{ type: "message" }]));
+	assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, "tok-a");
+});
+
+test("sessions leaving a full account do not all land on the same one", (t) => {
+	const random = t.mock.method(Math, "random", () => 0);
+	const moveFrom = (value: number) => {
+		random.mock.mockImplementation(() => value);
+		writeAccounts("a", { a: 0.9, b: 0.1, login: 0.1 });
+		handlers.session_start({}, ctx);
+		return handlers.message_end(failure(BRIDGE_LIMIT), ctx).message.errorMessage;
+	};
+	assert.match(moveFrom(0), /"b"/);
+	assert.match(moveFrom(0.99), /"login"/);
 });

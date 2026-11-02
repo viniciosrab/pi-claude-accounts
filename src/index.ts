@@ -9,7 +9,7 @@ import { completeArgs } from "./completions.ts";
 import { formatReset } from "./format.ts";
 import { parseFiveHour } from "./headers.ts";
 import { exhaustedUsage, isLimitFailure, retryNotice } from "./limit.ts";
-import { effectiveUtilization, pickAccount, pickSessionAccount, THRESHOLD, type Usage } from "./policy.ts";
+import { effectiveUtilization, pickAccount, pickNewSessionAccount, pickSessionAccount, THRESHOLD, type Usage } from "./policy.ts";
 import { isAuthFailure, PREFETCH_AT, probeAccount, staleAccounts } from "./probe.ts";
 import { addAccount, isLoginAccount, loadStore, removeAccount, renameAccount, updateStore, type Store } from "./store.ts";
 
@@ -44,12 +44,14 @@ export default function (pi: ExtensionAPI) {
 	const load = (): Store => loadStore(storePath());
 	const update = (change: (s: Store) => Store): Store => updateStore(storePath(), change);
 	// The account this process exports, so every Claude Code CLI it starts from here on (the next run, a
-	// retry) runs on it. A subagent Pi starts on the shared active account instead: a new conversation has
-	// no cache to keep. Each Pi session keeps its own: the prompt cache is per account, so
+	// retry) runs on it. A new conversation, subagents included, has no cache to keep and starts on any
+	// account with room. Each Pi session then keeps its own: the prompt cache is per account, so
 	// following another instance's switch would re-cache this session's whole conversation.
 	let envAccount: string | undefined;
 	// The account's own token, undefined for the login account: unchanged when another instance renames it.
 	let envToken: string | undefined;
+	// Any account can go, the Claude Code login included, as long as one is left.
+	const removableNames = (s: Store) => (s.accounts.length > 1 ? s.accounts.map((a) => a.name) : []);
 	const tokenOf = (name: string) => load().accounts.find((a) => a.name === name)?.token;
 	const apply = (name: string) => {
 		envToken = tokenOf(name);
@@ -162,10 +164,18 @@ export default function (pi: ExtensionAPI) {
 		afterSwitch = { to, left: LOGGED_REPLIES };
 	};
 
+	// A conversation with messages goes to the active account, the likeliest to still hold its cache.
+	const isNewConversation = (ctx: ExtensionContext) => {
+		const entries = ctx.sessionManager?.getEntries?.();
+		return entries !== undefined && !entries.some((e) => e.type === "message");
+	};
+
 	pi.on("session_start", (_event, ctx) =>
 		safe(ctx, () => {
-			applyActive();
-			setRun(load().active);
+			const s = load();
+			const name = isNewConversation(ctx) ? pickNewSessionAccount(s.accounts, s.active, now()) : s.active;
+			apply(name);
+			setRun(name);
 		}),
 	);
 
@@ -226,8 +236,8 @@ export default function (pi: ExtensionAPI) {
 			if (authFailed) patchAccount(failed, { authFailed: true });
 			else patchAccount(failed, { usage: exhaustedUsage(load().accounts.find((a) => a.name === failed)?.usage, now()) });
 			const s = load();
-			// Another process may already have moved on; then the active account is the way out.
-			const to = pickAccount(s.accounts, s.active, now()).name;
+			// The failed account was just marked used up, so this scatters like a switch at 95% does.
+			const to = pickAccount(s.accounts, failed, now()).name;
 			const target = s.accounts.find((a) => a.name === to);
 			const usable = target && to !== failed && !target.authFailed && effectiveUtilization(target, now()) < THRESHOLD;
 			const why = authFailed ? REJECTED : "limit reached";
@@ -291,11 +301,13 @@ export default function (pi: ExtensionAPI) {
 	};
 	const removeFlow = async (ctx: ExtensionContext, name?: string) => {
 		const s = load();
-		const removable = s.accounts.filter((a) => !isLoginAccount(a)).map((a) => a.name);
-		if (!name && removable.length === 0) return ctx.ui.notify("No accounts to remove besides the Claude Code login.", "info");
+		const removable = removableNames(s);
+		if (!name && removable.length === 0) return ctx.ui.notify("Only one account is left; it cannot be removed.", "info");
 		const n = name ?? (await pickName(ctx, "Remove account", removable));
 		if (!n) return;
-		if (!name && !(await ctx.ui.confirm("Remove account?", `"${n}" and its token will be deleted.`))) return;
+		const login = s.accounts.some((a) => a.name === n && isLoginAccount(a));
+		const what = login ? `"${n}" is the Claude Code login; it will no longer be listed or used here (Claude Code stays logged in).` : `"${n}" and its token will be deleted.`;
+		if (!name && !(await ctx.ui.confirm("Remove account?", what))) return;
 		update((latest) => removeAccount(latest, n));
 		// Only a session running on the removed account moves; the others keep theirs.
 		if (envAccount === undefined || !load().accounts.some((a) => a.name === envAccount)) applyActive();
@@ -337,8 +349,8 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("claude-accounts", {
 		description: "Manage Claude Code accounts (auto-switch at 95% of the 5h limit)",
 		getArgumentCompletions: (prefix: string) => {
-			const accounts = load().accounts;
-			return completeArgs(prefix, accounts.map((a) => a.name), accounts.filter((a) => !isLoginAccount(a)).map((a) => a.name));
+			const s = load();
+			return completeArgs(prefix, s.accounts.map((a) => a.name), removableNames(s));
 		},
 		handler: async (args: string, ctx: ExtensionContext) => {
 			const [cmd, name, token] = args.trim().split(/\s+/).filter(Boolean);

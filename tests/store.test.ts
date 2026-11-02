@@ -30,12 +30,12 @@ test("duplicate names and the reserved default name are rejected", () => {
 	assert.throws(() => addAccount(s, DEFAULT_ACCOUNT, "t"), /already exists/);
 });
 
-test("removing the active account falls back to default; default cannot be removed", () => {
+test("removing the active account falls back to default; the only account cannot be removed", () => {
 	let s = addAccount(loadStore(tmp()), "work", "t");
 	s.active = "work";
 	s = removeAccount(s, "work");
 	assert.equal(s.active, DEFAULT_ACCOUNT);
-	assert.throws(() => removeAccount(s, DEFAULT_ACCOUNT), /default/);
+	assert.throws(() => removeAccount(s, DEFAULT_ACCOUNT), /only account/);
 	assert.throws(() => removeAccount(s, "nope"), /not found/);
 });
 
@@ -99,8 +99,19 @@ test("the login account (no token) keeps working under a new name", async () => 
 	const back = loadStore(p);
 	assert.deepEqual(back.accounts.map((a) => a.name), ["vinicios10", "work"]); // no extra "default" re-created
 	assert.equal(back.active, "vinicios10");
-	assert.throws(() => removeAccount(back, "vinicios10"), /login/);
 	let s = { ...back, active: "work" };
 	s = removeAccount(s, "work");
 	assert.equal(s.active, "vinicios10"); // falls back to the renamed login account
+});
+
+test("the login account can be removed and is not re-created on load", async () => {
+	const { renameAccount } = await import("../src/store.ts");
+	const p = tmp();
+	saveStore(p, removeAccount(renameAccount(addAccount(loadStore(p), "work", "t"), DEFAULT_ACCOUNT, "vinicios10"), "vinicios10"));
+	const back = loadStore(p);
+	assert.deepEqual(back.accounts, [{ name: "work", token: "t" }]);
+	assert.equal(back.active, "work"); // the active login falls back to the remaining account
+	assert.throws(() => removeAccount(back, "work"), /only account/);
+	saveStore(p, renameAccount(back, "work", "job"));
+	assert.deepEqual(loadStore(p).accounts.map((a) => a.name), ["job"]); // a later write keeps it removed
 });

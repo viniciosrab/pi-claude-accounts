@@ -13,7 +13,7 @@ pi install git:github.com/viniciosrab/pi-claude-accounts
 1. For each extra account, log in to it and run `claude setup-token` to get a token.
 2. In Pi, run `/claude-accounts`, choose **Add account**, and paste the name and token.
 
-The account you are already logged in with in Claude Code is listed too (as `default`); you can rename it but not remove it.
+The account you are already logged in with in Claude Code is listed too (as `default`); you can rename or remove it. Removing it only stops this extension from listing and using it; Claude Code stays logged in. To bring it back, delete `"loginRemoved": true` from `~/.pi/agent/claude-accounts.json`. The last account left cannot be removed.
 
 ## Commands
 
@@ -30,12 +30,12 @@ Run `/claude-accounts` for a menu, or use the subcommands (they autocomplete):
 
 ## How it works
 
-- At 95% or more it switches and shows `Claude account switched: a (96%) → b (12%)`. Subagents and new messages use the new account.
+- At 95% or more it switches and shows `Claude account switched: a (96%) → b (12%)`. New messages use the new account.
 - If a running task hits the limit anyway, it carries on with the new account instead of stopping (`continuing on "b"`). This relies on Pi's auto-retry, which is on by default.
 - Other accounts are checked in the background once the active one passes 85%, so a switch never lands on an exhausted account.
 - A token Claude Code rejects is marked `[token rejected, re-add it]` and skipped. **Switch** to it retries it.
 - If every account is at its limit, it waits on the one that resets first.
-- Only the 5-hour limit is considered. Several Pi windows can run at once. Each window stays on its own account until that account reaches the limit, then moves to the shared active one, so one window switching does not reset the prompt cache of the others. New windows start on the active account; `use` switches the window you run it in.
+- Only the 5-hour limit is considered. Several Pi windows can run at once. Each window stays on its own account until that account reaches the limit, so one window switching does not reset the prompt cache of the others. A window that has to move, and any new conversation (subagents included), picks a random account with room, favoring the emptier ones, so windows do not pile up on one account and all have to move again when it fills. A reopened conversation starts on the active account. `use` switches the window you run it in; new conversations do not follow it.
 
 ## Notes
 
