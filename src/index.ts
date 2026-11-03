@@ -17,6 +17,9 @@ const ENV = "CLAUDE_CODE_OAUTH_TOKEN";
 // What the user exported before any Pi set ENV. Subagent processes inherit the parent's ENV, which is
 // then an account's token, so the first Pi records the original here for the processes it starts.
 const EXTERNAL = "PI_CLAUDE_ACCOUNTS_EXTERNAL_TOKEN";
+// The process that last chose the account in ENV. Subagents inherit the variable with their
+// parent's pid, so only a load in the same process (a /reload) finds its own.
+const OWNER = "PI_CLAUDE_ACCOUNTS_PID";
 const PROVIDER = "claude-bridge";
 const USAGE = "Usage: /claude-accounts add <name> [token] | list | refresh | use <name> | rename <name> <new-name> | remove <name> | status";
 
@@ -38,6 +41,10 @@ const retrySettings = () => {
 };
 
 export default function (pi: ExtensionAPI) {
+	// An earlier load in this same process (a /reload) chose the account ENV holds.
+	// Only the session this load starts with: a later /resume opens a conversation that never ran here.
+	let reloaded = process.env[OWNER] === String(process.pid);
+	process.env[OWNER] = String(process.pid);
 	if (process.env[EXTERNAL] === undefined) process.env[EXTERNAL] = process.env[ENV] ?? "";
 	const externalToken = process.env[EXTERNAL] || undefined; // what the login account means when the user exported a token
 	// No in-memory copy: other Pi instances write the same file, so every read and write goes to disk.
@@ -70,6 +77,14 @@ export default function (pi: ExtensionAPI) {
 	};
 	const ownAccount = () => (envAccount = current(envAccount, envToken));
 	const applyActive = () => apply(load().active);
+	/** The account an earlier load in this process left in ENV, when it is still in the store. */
+	const reloadedAccount = (): string | undefined => {
+		if (!reloaded) return undefined;
+		const token = process.env[ENV];
+		const accounts = load().accounts;
+		if (token && token !== externalToken) return accounts.find((a) => a.token === token)?.name;
+		return accounts.find((a) => isLoginAccount(a))?.name;
+	};
 	const age = (u: Usage) => (u.checkedAt === undefined ? "" : ` (checked ${Math.max(0, Math.round((now() - u.checkedAt) / 60))}m ago)`);
 	const REJECTED = "token rejected, re-add it";
 	const describe = (s: Store) =>
@@ -173,7 +188,10 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) =>
 		safe(ctx, () => {
 			const s = load();
-			const name = isNewConversation(ctx) ? pickNewSessionAccount(s.accounts, s.active, now()) : s.active;
+			// A reopened conversation stays where its cache is: the account it ran on before a /reload,
+			// else the active one. before_agent_start still moves it off a used-up account.
+			const name = isNewConversation(ctx) ? pickNewSessionAccount(s.accounts, s.active, now()) : (reloadedAccount() ?? s.active);
+			reloaded = false;
 			apply(name);
 			setRun(name);
 		}),

@@ -35,7 +35,7 @@ Run `/claude-accounts` for a menu, or use the subcommands (they autocomplete):
 - Other accounts are checked in the background once the active one passes 85%, so a switch never lands on an exhausted account.
 - A token Claude Code rejects is marked `[token rejected, re-add it]` and skipped. **Switch** to it retries it.
 - If every account is at its limit, it waits on the one that resets first.
-- Only the 5-hour limit is considered. Several Pi windows can run at once. Each window stays on its own account until that account reaches the limit, so one window switching does not reset the prompt cache of the others. A window that has to move, and any new conversation (subagents included), picks a random account with room, favoring the emptier ones, so windows do not pile up on one account and all have to move again when it fills. A reopened conversation starts on the active account. `use` switches the window you run it in; new conversations do not follow it.
+- Only the 5-hour limit is considered. Several Pi windows can run at once. Each window stays on its own account until that account reaches the limit, so one window switching does not reset the prompt cache of the others. A window that has to move, and any new conversation (subagents included), picks a random account with room, favoring the emptier ones, so windows do not pile up on one account and all have to move again when it fills. A reopened conversation starts on the active account, except after `/reload`, which keeps it on the account it was running on so its prompt cache survives. `use` switches the window you run it in; new conversations do not follow it.
 
 ## Notes
 
