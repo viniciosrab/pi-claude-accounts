@@ -58,6 +58,7 @@ beforeEach(() => {
 	process.env.TEST_AGENT_DIR = dir;
 	delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
 	delete process.env.PI_CLAUDE_ACCOUNTS_EXTERNAL_TOKEN;
+	delete process.env.PI_CLAUDE_ACCOUNTS_PID;
 	handlers = {};
 	notices = [];
 	load();
@@ -253,6 +254,7 @@ test("a subagent inheriting the parent's account token does not take it for the 
 	handlers.session_start({}, ctx); // parent: login account, nothing exported
 	await command("use a", ctx); // parent now runs on "a"
 	assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, "tok-a");
+	process.env.PI_CLAUDE_ACCOUNTS_PID = "1"; // a subagent is another process: its parent's pid
 	load(); // a subagent process starts with the parent's environment
 	writeAccounts("login", { a: 0.1, b: 0.1, login: 0.1 });
 	handlers.session_start({}, ctx);
@@ -363,4 +365,51 @@ test("sessions leaving a full account do not all land on the same one", (t) => {
 	};
 	assert.match(moveFrom(0), /"b"/);
 	assert.match(moveFrom(0.99), /"login"/);
+});
+
+// /reload re-imports the extension in the same process: the environment still carries the account
+// this session ran on, while the shared default may have moved with another window.
+test("a reload keeps a reopened conversation on the account it was running on", (t) => {
+	t.mock.method(Math, "random", () => 0.99);
+	writeAccounts("a", { a: 0.1, b: 0.1 });
+	handlers.session_start({}, withHistory([{ type: "model_change" }])); // new conversation lands on "b"
+	assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, "tok-b");
+	load(); // /reload
+	handlers.session_start({}, withHistory([{ type: "message" }]));
+	handlers.before_agent_start({}, ctx);
+	assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, "tok-b", "the conversation's cache lives on its own account");
+	assert.equal(readStore().active, "a", "the shared default is left alone");
+	assert.deepEqual(readLog(), [], "nothing switched");
+});
+
+test("a reload keeps a conversation on the login account there", (t) => {
+	t.mock.method(Math, "random", () => 0.99);
+	writeAccounts("a", { a: 0.1, b: 0.1, login: 0.1 });
+	handlers.session_start({}, withHistory([{ type: "model_change" }])); // new conversation lands on "login"
+	assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+	load();
+	handlers.session_start({}, withHistory([{ type: "message" }]));
+	handlers.before_agent_start({}, ctx);
+	assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+});
+
+test("after a reload a used-up account still moves at the next prompt", (t) => {
+	t.mock.method(Math, "random", () => 0.99);
+	writeAccounts("a", { a: 0.1, b: 0.1 });
+	handlers.session_start({}, withHistory([{ type: "model_change" }]));
+	load();
+	writeAccounts("a", { a: 0.1, b: 0.97 });
+	handlers.session_start({}, withHistory([{ type: "message" }]));
+	handlers.before_agent_start({}, ctx);
+	assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, "tok-a");
+});
+
+test("after a reload, /resume of another conversation starts on the active account as before", (t) => {
+	t.mock.method(Math, "random", () => 0.99);
+	writeAccounts("a", { a: 0.1, b: 0.1 });
+	handlers.session_start({}, withHistory([{ type: "model_change" }]));
+	load();
+	handlers.session_start({}, withHistory([{ type: "message" }])); // the reloaded conversation stays on "b"
+	handlers.session_start({}, withHistory([{ type: "message" }])); // /resume of another one
+	assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, "tok-a");
 });
