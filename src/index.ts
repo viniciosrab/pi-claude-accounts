@@ -17,9 +17,9 @@ const ENV = "CLAUDE_CODE_OAUTH_TOKEN";
 // What the user exported before any Pi set ENV. Subagent processes inherit the parent's ENV, which is
 // then an account's token, so the first Pi records the original here for the processes it starts.
 const EXTERNAL = "PI_CLAUDE_ACCOUNTS_EXTERNAL_TOKEN";
-// The process that last chose the account in ENV. Subagents inherit the variable with their
-// parent's pid, so only a load in the same process (a /reload) finds its own.
-const OWNER = "PI_CLAUDE_ACCOUNTS_PID";
+// Session entry naming the account a conversation runs on: the prompt cache is per account, so a
+// reopened conversation (/reload, /resume, pi --continue, a fork) goes back to it. Never the token.
+const ENTRY = "claude-accounts";
 const PROVIDER = "claude-bridge";
 const USAGE = "Usage: /claude-accounts add <name> [token] | list | refresh | use <name> | rename <name> <new-name> | remove <name> | status";
 
@@ -41,10 +41,6 @@ const retrySettings = () => {
 };
 
 export default function (pi: ExtensionAPI) {
-	// An earlier load in this same process (a /reload) chose the account ENV holds.
-	// Only the session this load starts with: a later /resume opens a conversation that never ran here.
-	let reloaded = process.env[OWNER] === String(process.pid);
-	process.env[OWNER] = String(process.pid);
 	if (process.env[EXTERNAL] === undefined) process.env[EXTERNAL] = process.env[ENV] ?? "";
 	const externalToken = process.env[EXTERNAL] || undefined; // what the login account means when the user exported a token
 	// No in-memory copy: other Pi instances write the same file, so every read and write goes to disk.
@@ -60,12 +56,20 @@ export default function (pi: ExtensionAPI) {
 	// Any account can go, the Claude Code login included, as long as one is left.
 	const removableNames = (s: Store) => (s.accounts.length > 1 ? s.accounts.map((a) => a.name) : []);
 	const tokenOf = (name: string) => load().accounts.find((a) => a.name === name)?.token;
+	// The account last recorded in the current session, so each change is appended once.
+	let recordedAccount: string | undefined;
 	const apply = (name: string) => {
 		envToken = tokenOf(name);
 		const token = envToken ?? externalToken;
 		if (token) process.env[ENV] = token;
 		else delete process.env[ENV];
 		envAccount = name;
+		if (name !== recordedAccount) {
+			try {
+				pi.appendEntry(ENTRY, { account: name });
+				recordedAccount = name;
+			} catch {} // no session to record in yet
+		}
 	};
 	// The current name of an account this process holds: another instance may have renamed it, and its
 	// token finds it again. The login account is the one without a token of its own.
@@ -77,13 +81,20 @@ export default function (pi: ExtensionAPI) {
 	};
 	const ownAccount = () => (envAccount = current(envAccount, envToken));
 	const applyActive = () => apply(load().active);
-	/** The account an earlier load in this process left in ENV, when it is still in the store. */
-	const reloadedAccount = (): string | undefined => {
-		if (!reloaded) return undefined;
+	/** The account this conversation last recorded, when it is still in the store. */
+	const sessionAccount = (ctx: ExtensionContext): string | undefined => {
+		const manager = ctx.sessionManager as { getBranch?: () => unknown[]; getEntries?: () => unknown[] } | undefined;
+		const entries = (manager?.getBranch?.() ?? manager?.getEntries?.() ?? []) as { type?: string; customType?: string; data?: { account?: unknown } }[];
+		const last = entries.findLast((e) => e.type === "custom" && e.customType === ENTRY && typeof e.data?.account === "string");
+		const name = last?.data?.account as string | undefined;
+		return name !== undefined && load().accounts.some((a) => a.name === name) ? name : undefined;
+	};
+	/** The account an earlier load of this process left in ENV, for a /reload of a conversation that
+	 *  recorded none (it ran on a version before the entry). */
+	const envAccountNow = (): string | undefined => {
 		const token = process.env[ENV];
 		const accounts = load().accounts;
-		if (token && token !== externalToken) return accounts.find((a) => a.token === token)?.name;
-		return accounts.find((a) => isLoginAccount(a))?.name;
+		return (token ? accounts.find((a) => a.token === token) : undefined)?.name ?? accounts.find((a) => isLoginAccount(a))?.name;
 	};
 	const age = (u: Usage) => (u.checkedAt === undefined ? "" : ` (checked ${Math.max(0, Math.round((now() - u.checkedAt) / 60))}m ago)`);
 	const REJECTED = "token rejected, re-add it";
@@ -185,13 +196,18 @@ export default function (pi: ExtensionAPI) {
 		return entries !== undefined && !entries.some((e) => e.type === "message");
 	};
 
-	pi.on("session_start", (_event, ctx) =>
+	pi.on("session_start", (event, ctx) =>
 		safe(ctx, () => {
 			const s = load();
-			// A reopened conversation stays where its cache is: the account it ran on before a /reload,
-			// else the active one. before_agent_start still moves it off a used-up account.
-			const name = isNewConversation(ctx) ? pickNewSessionAccount(s.accounts, s.active, now()) : (reloadedAccount() ?? s.active);
-			reloaded = false;
+			const recorded = sessionAccount(ctx);
+			recordedAccount = recorded;
+			// A reopened conversation goes back to where its cache is: the account it recorded, else
+			// (a /reload of one recorded before this version) the account still in ENV, else the active
+			// one. before_agent_start still moves it off a used-up account.
+			const reload = (event as { reason?: string } | undefined)?.reason === "reload";
+			const name = isNewConversation(ctx)
+				? pickNewSessionAccount(s.accounts, s.active, now())
+				: (recorded ?? (reload ? envAccountNow() : undefined) ?? s.active);
 			apply(name);
 			setRun(name);
 		}),

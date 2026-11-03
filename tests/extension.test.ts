@@ -29,6 +29,8 @@ let dir: string;
 let handlers: Record<string, Handler>;
 let command: (args: string, ctx: any) => Promise<void>;
 let notices: { text: string; level: string }[];
+// What the extension appended to the session file with pi.appendEntry.
+let recorded: { type: string; customType: string; data: any }[];
 const ctx = { model: { provider: "claude-bridge" }, ui: { notify: (text: string, level: string) => notices.push({ text, level }) } };
 const storeFile = () => join(dir, "claude-accounts.json");
 const readStore = () => JSON.parse(readFileSync(storeFile(), "utf-8"));
@@ -51,15 +53,20 @@ const headers = (utilization: number) => ({
 });
 const failure = (errorMessage: string) => ({ message: { role: "assistant", provider: "claude-bridge", stopReason: "error", errorMessage, content: [] } });
 
-const load = () => extension({ on: (name: string, h: Handler) => (handlers[name] = h), registerCommand: (_: string, c: any) => (command = c.handler) } as any);
+const load = () =>
+	extension({
+		on: (name: string, h: Handler) => (handlers[name] = h),
+		registerCommand: (_: string, c: any) => (command = c.handler),
+		appendEntry: (customType: string, data: any) => recorded.push({ type: "custom", customType, data }),
+	} as any);
 
 beforeEach(() => {
 	dir = mkdtempSync(join(tmpdir(), "claude-accounts-"));
 	process.env.TEST_AGENT_DIR = dir;
 	delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
 	delete process.env.PI_CLAUDE_ACCOUNTS_EXTERNAL_TOKEN;
-	delete process.env.PI_CLAUDE_ACCOUNTS_PID;
 	handlers = {};
+	recorded = [];
 	notices = [];
 	load();
 });
@@ -254,7 +261,6 @@ test("a subagent inheriting the parent's account token does not take it for the 
 	handlers.session_start({}, ctx); // parent: login account, nothing exported
 	await command("use a", ctx); // parent now runs on "a"
 	assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, "tok-a");
-	process.env.PI_CLAUDE_ACCOUNTS_PID = "1"; // a subagent is another process: its parent's pid
 	load(); // a subagent process starts with the parent's environment
 	writeAccounts("login", { a: 0.1, b: 0.1, login: 0.1 });
 	handlers.session_start({}, ctx);
@@ -338,7 +344,9 @@ test("nothing is logged without a switch", () => {
 	assert.deepEqual(readLog(), []);
 });
 
-const withHistory = (entries: { type: string }[]) => ({ ...ctx, sessionManager: { getSessionId: () => "s1", getEntries: () => entries } });
+const withHistory = (entries: { type: string }[]) => ({ ...ctx, sessionManager: { getSessionId: () => "s1", getEntries: () => entries, getBranch: () => entries } });
+// A conversation with messages plus the account entries this extension recorded in it.
+const reopened = () => withHistory([{ type: "message" }, ...recorded]);
 
 test("a new conversation starts on any account with room and leaves the active one alone", (t) => {
 	t.mock.method(Math, "random", () => 0.99);
@@ -375,7 +383,7 @@ test("a reload keeps a reopened conversation on the account it was running on", 
 	handlers.session_start({}, withHistory([{ type: "model_change" }])); // new conversation lands on "b"
 	assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, "tok-b");
 	load(); // /reload
-	handlers.session_start({}, withHistory([{ type: "message" }]));
+	handlers.session_start({ reason: "reload" }, reopened());
 	handlers.before_agent_start({}, ctx);
 	assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, "tok-b", "the conversation's cache lives on its own account");
 	assert.equal(readStore().active, "a", "the shared default is left alone");
@@ -388,7 +396,7 @@ test("a reload keeps a conversation on the login account there", (t) => {
 	handlers.session_start({}, withHistory([{ type: "model_change" }])); // new conversation lands on "login"
 	assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
 	load();
-	handlers.session_start({}, withHistory([{ type: "message" }]));
+	handlers.session_start({ reason: "reload" }, reopened());
 	handlers.before_agent_start({}, ctx);
 	assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
 });
@@ -399,17 +407,66 @@ test("after a reload a used-up account still moves at the next prompt", (t) => {
 	handlers.session_start({}, withHistory([{ type: "model_change" }]));
 	load();
 	writeAccounts("a", { a: 0.1, b: 0.97 });
-	handlers.session_start({}, withHistory([{ type: "message" }]));
+	handlers.session_start({ reason: "reload" }, reopened());
 	handlers.before_agent_start({}, ctx);
 	assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, "tok-a");
 });
 
-test("after a reload, /resume of another conversation starts on the active account as before", (t) => {
+test("/resume brings a conversation back to the account it last ran on", (t) => {
 	t.mock.method(Math, "random", () => 0.99);
 	writeAccounts("a", { a: 0.1, b: 0.1 });
-	handlers.session_start({}, withHistory([{ type: "model_change" }]));
+	handlers.session_start({ reason: "new" }, withHistory([{ type: "model_change" }])); // conversation X lands on "b"
+	const x = [{ type: "message" }, ...recorded];
+	handlers.session_start({ reason: "resume" }, withHistory([{ type: "message" }, { type: "custom", customType: "claude-accounts", data: { account: "a" } }])); // Y ran on "a"
+	assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, "tok-a");
+	handlers.session_start({ reason: "resume" }, withHistory(x)); // back to X
+	assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, "tok-b");
+	assert.equal(readStore().active, "a", "the shared default is left alone");
+});
+
+test("/resume of a conversation with no recorded account starts on the active account", () => {
+	writeAccounts("a", { a: 0.1, b: 0.1 });
+	process.env.CLAUDE_CODE_OAUTH_TOKEN = "tok-b"; // the conversation open before
+	handlers.session_start({ reason: "resume" }, withHistory([{ type: "message" }]));
+	assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, "tok-a");
+});
+
+test("pi --continue and a fork reopen on the recorded account", () => {
+	writeAccounts("a", { a: 0.1, b: 0.1 });
+	const history = withHistory([{ type: "message" }, { type: "custom", customType: "claude-accounts", data: { account: "b" } }]);
+	handlers.session_start({ reason: "startup" }, history);
+	assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, "tok-b");
 	load();
-	handlers.session_start({}, withHistory([{ type: "message" }])); // the reloaded conversation stays on "b"
-	handlers.session_start({}, withHistory([{ type: "message" }])); // /resume of another one
+	handlers.session_start({ reason: "fork" }, history);
+	assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, "tok-b");
+});
+
+test("a resumed conversation on a used-up account still moves at the next prompt", () => {
+	writeAccounts("a", { a: 0.1, b: 0.97 });
+	handlers.session_start({ reason: "resume" }, withHistory([{ type: "message" }, { type: "custom", customType: "claude-accounts", data: { account: "b" } }]));
+	handlers.before_agent_start({}, ctx);
+	assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, "tok-a");
+});
+
+test("the account is recorded once per change, never the token", (t) => {
+	t.mock.method(Math, "random", () => 0.99);
+	writeAccounts("a", { a: 0.96, b: 0.1 });
+	handlers.session_start({ reason: "startup" }, withHistory([{ type: "message" }])); // active "a"
+	handlers.before_agent_start({}, ctx); // "a" is used up: moves to "b"
+	handlers.before_agent_start({}, ctx);
+	assert.deepEqual(recorded.map((e) => e.data), [{ account: "a" }, { account: "b" }]);
+	assert.ok(!JSON.stringify(recorded).includes("tok-"));
+	load(); // a reload finds "b" already recorded and appends nothing
+	handlers.session_start({ reason: "reload" }, reopened());
+	assert.equal(recorded.length, 2);
+});
+
+test("a reload of a conversation recorded before this version keeps the exported token's account", () => {
+	// No login account, and the token exported in the shell is also account "a"'s.
+	writeFileSync(storeFile(), JSON.stringify({ active: "b", loginRemoved: true, accounts: [{ name: "a", token: "tok-a" }, { name: "b", token: "tok-b" }] }));
+	process.env.CLAUDE_CODE_OAUTH_TOKEN = "tok-a";
+	delete process.env.PI_CLAUDE_ACCOUNTS_EXTERNAL_TOKEN; // a fresh Pi records it as the external token
+	load();
+	handlers.session_start({ reason: "reload" }, withHistory([{ type: "message" }]));
 	assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, "tok-a");
 });
