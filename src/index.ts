@@ -107,6 +107,13 @@ export default function (pi: ExtensionAPI) {
 			})
 			.join("\n");
 
+	// A notice is an ephemeral status line that the next status message (any extension's) overwrites,
+	// so with a UI the list opens as a panel that stays until closed; picking a line does nothing.
+	const showList = async (ctx: ExtensionContext, extra = "") => {
+		if (!ctx.hasUI) return ctx.ui.notify(describe(load()) + (extra ? `\n${extra}` : ""), extra ? "warning" : "info");
+		await ctx.ui.select(`Claude accounts (5h usage)${extra ? ` · ${extra}` : ""} · Esc to close`, describe(load()).split("\n"));
+	};
+
 	// Always merges into the latest store: probes finish in the background, after other writes.
 	const patchAccount = (name: string, patch: { usage?: Usage; authFailed?: boolean }) => {
 		update((s) => ({
@@ -363,8 +370,7 @@ export default function (pi: ExtensionAPI) {
 		const names = load().accounts.map((a) => a.name);
 		ctx.ui.notify(`Checking 5h usage of ${names.length} accounts (about 10s; uses a tiny bit of each limit)...`, "info");
 		const answered = await refreshUsage(names);
-		const failed = answered < names.length ? `\n${names.length - answered} account(s) did not answer; check their tokens.` : "";
-		ctx.ui.notify(describe(load()) + failed, failed ? "warning" : "info");
+		await showList(ctx, answered < names.length ? `${names.length - answered} account(s) did not answer; check their tokens.` : "");
 	};
 
 	const renameFlow = async (ctx: ExtensionContext, name?: string, newName?: string) => {
@@ -409,7 +415,7 @@ export default function (pi: ExtensionAPI) {
 					case "list":
 					case "status":
 					case "List accounts":
-						return ctx.ui.notify(describe(load()), "info");
+						return await showList(ctx);
 					case undefined:
 						return;
 					default:
