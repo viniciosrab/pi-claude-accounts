@@ -28,6 +28,8 @@ Run `/claude-accounts` for a menu, or use the subcommands (they autocomplete):
 /claude-accounts remove <name>
 ```
 
+`list` and `refresh` open the accounts in a panel that stays until you close it with Esc, so a status message from another extension cannot wipe the list. Without a UI (print or JSON mode) they print it as a notice.
+
 ## How it works
 
 - At 95% or more it switches and shows `Claude account switched: a (96%) → b (12%)`. New messages use the new account.

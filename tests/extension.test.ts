@@ -470,3 +470,29 @@ test("a reload of a conversation recorded before this version keeps the exported
 	handlers.session_start({ reason: "reload" }, withHistory([{ type: "message" }]));
 	assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, "tok-a");
 });
+
+// A notify line is overwritten by the next status message (e.g. another extension's), so the list would vanish.
+test("the account list opens in a panel that stays until closed, from the menu and the list subcommand", async () => {
+	writeAccounts("a", { a: 0.4, b: 0.1, login: 0.2 });
+	const shown: { title: string; items: string[] }[] = [];
+	const ui = { ...ctx.ui, select: async (title: string, items: string[]) => (shown.push({ title, items }), title === "Claude accounts" ? "List accounts" : undefined) };
+	await command("", { ...ctx, hasUI: true, ui });
+	await command("list", { ...ctx, hasUI: true, ui });
+	const list = shown.filter((s) => s.title !== "Claude accounts");
+	assert.equal(list.length, 2);
+	for (const s of list) {
+		assert.equal(s.title, "Claude accounts (5h usage) · Esc to close");
+		assert.equal(s.items.length, 3);
+		assert.match(s.items[0], /^\* a {2}5h: 40%/);
+		assert.match(s.items[1], /^ {2}b {2}5h: 10%/);
+	}
+	assert.deepEqual(notices, []);
+});
+
+test("without a UI the account list is still printed as a notice", async () => {
+	writeAccounts("a", { a: 0.4, b: 0.1, login: 0.2 });
+	await command("list", ctx);
+	assert.equal(notices.length, 1);
+	assert.equal(notices[0].level, "info");
+	assert.match(notices[0].text, /^\* a {2}5h: 40%/);
+});
