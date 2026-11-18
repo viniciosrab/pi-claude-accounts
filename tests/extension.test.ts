@@ -502,6 +502,18 @@ test("the account list shows the weekly usage next to the 5h usage", async () =>
 	assert.doesNotMatch(login, /week/);
 });
 
+test("the account list is sorted by the weekly reset, soonest first; accounts without one go last", async () => {
+	writeAccounts("a", { a: 0.4, b: 0.1, login: 0.2 });
+	const s = readStore();
+	s.accounts[0].usage.week = { utilization: 0.25, resetsAt: now() + 4 * 86400 };
+	s.accounts[1].usage.week = { utilization: 0.8, resetsAt: now() - 60 };
+	s.accounts[2].usage.week = { utilization: 0.5, resetsAt: now() + 86400 };
+	s.accounts.push({ name: "c", token: "tok-c" });
+	writeFileSync(storeFile(), JSON.stringify(s));
+	await command("list", ctx);
+	assert.deepEqual(notices[0].text.split("\n").map((l) => l.slice(2).split(" ")[0]), ["login", "a", "b", "c"]);
+});
+
 test("the weekly usage reported by the bridge is stored with the 5h usage", () => {
 	writeAccounts("a", { a: 0.4, b: 0.1 });
 	handlers.after_provider_response({ headers: { ...headers(0.5), "anthropic-ratelimit-unified-7d-utilization": "0.3", "anthropic-ratelimit-unified-7d-reset": String(RESET + 86400) } }, ctx);

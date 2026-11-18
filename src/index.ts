@@ -102,8 +102,14 @@ export default function (pi: ExtensionAPI) {
 		const reset = formatReset(w.resetsAt, now());
 		return pct(windowUtilization(w, now())) + (reset ? `, ${reset}` : "");
 	};
+	/** When the weekly window resets (Unix seconds); accounts with no upcoming reset sort last. */
+	const weekReset = (a: Store["accounts"][number]) => {
+		const at = a.usage?.week?.resetsAt;
+		return at !== undefined && at > now() ? at : Number.POSITIVE_INFINITY;
+	};
 	const describe = (s: Store) =>
-		s.accounts
+		[...s.accounts]
+			.sort((x, y) => weekReset(x) - weekReset(y) || 0)
 			.map((a) => {
 				const usage = a.usage ? window(a.usage) + (a.usage.week ? ` · week: ${window(a.usage.week)}` : "") + age(a.usage) : "n/a";
 				return `${a.name === s.active ? "*" : " "} ${a.name}  5h: ${usage}${a.authFailed ? `  [${REJECTED}]` : ""}`;

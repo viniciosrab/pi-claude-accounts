@@ -20,7 +20,7 @@ The account you are already logged in with in Claude Code is listed too (as `def
 Run `/claude-accounts` for a menu, or use the subcommands (they autocomplete):
 
 ```
-/claude-accounts list                  # 5h and weekly usage and time until reset, per account
+/claude-accounts list                  # 5h and weekly usage and time until reset, per account, soonest weekly reset first
 /claude-accounts refresh               # check every account now
 /claude-accounts add <name> [token]
 /claude-accounts use <name>
