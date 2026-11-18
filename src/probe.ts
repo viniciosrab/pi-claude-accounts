@@ -1,4 +1,4 @@
-// Reads an inactive account's 5h usage. setup-token tokens are refused by the usage endpoint and
+// Reads an inactive account's 5h (and weekly) usage. setup-token tokens are refused by the usage endpoint and
 // by direct API calls, so the probe runs Claude Code itself with a minimal Haiku prompt; its
 // rate_limit_event reports the window even when the account is exhausted.
 
@@ -48,8 +48,12 @@ export function parseProbeOutput(stdout: string): Usage | undefined {
 		} catch {
 			continue;
 		}
-		const w = msg?.type === "rate_limit_event" ? msg.rate_limit_info?.unifiedWindows?.five_hour : undefined;
-		if (w && typeof w.utilization === "number") found = { utilization: w.utilization, resetsAt: w.resetsAt };
+		const windows = msg?.type === "rate_limit_event" ? msg.rate_limit_info?.unifiedWindows : undefined;
+		const w = windows?.five_hour;
+		if (!w || typeof w.utilization !== "number") continue;
+		found = { utilization: w.utilization, resetsAt: w.resetsAt };
+		const week = windows.seven_day;
+		if (week && typeof week.utilization === "number") found.week = { utilization: week.utilization, resetsAt: week.resetsAt };
 	}
 	return found;
 }

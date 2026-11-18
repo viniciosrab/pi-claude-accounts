@@ -5,8 +5,8 @@ import { DEFAULT_ACCOUNT } from "./store.ts";
 export type Completion = { value: string; label: string; description?: string };
 
 export const SUBCOMMANDS: ReadonlyArray<{ name: string; description: string }> = [
-	{ name: "list", description: "Show accounts and 5h usage" },
-	{ name: "refresh", description: "Check the 5h usage of every account now" },
+	{ name: "list", description: "Show accounts with 5h and weekly usage" },
+	{ name: "refresh", description: "Check the 5h and weekly usage of every account now" },
 	{ name: "add", description: "Register a new account" },
 	{ name: "use", description: "Switch to an account now" },
 	{ name: "rename", description: "Rename an account" },

@@ -481,12 +481,32 @@ test("the account list opens in a panel that stays until closed, from the menu a
 	const list = shown.filter((s) => s.title !== "Claude accounts");
 	assert.equal(list.length, 2);
 	for (const s of list) {
-		assert.equal(s.title, "Claude accounts (5h usage) · Esc to close");
+		assert.equal(s.title, "Claude accounts (5h and weekly usage) · Esc to close");
 		assert.equal(s.items.length, 3);
 		assert.match(s.items[0], /^\* a {2}5h: 40%/);
 		assert.match(s.items[1], /^ {2}b {2}5h: 10%/);
 	}
 	assert.deepEqual(notices, []);
+});
+
+test("the account list shows the weekly usage next to the 5h usage", async () => {
+	writeAccounts("a", { a: 0.4, b: 0.1, login: 0.2 });
+	const s = readStore();
+	s.accounts[0].usage.week = { utilization: 0.25, resetsAt: now() + 2 * 86400 + 600 };
+	s.accounts[1].usage.week = { utilization: 0.8, resetsAt: now() - 60 };
+	writeFileSync(storeFile(), JSON.stringify(s));
+	await command("list", ctx);
+	const [a, b, login] = notices[0].text.split("\n");
+	assert.match(a, /^\* a {2}5h: 40%, resets in (59m|1h 0m) · week: 25%, resets in 2d 0h \(checked 0m ago\)$/);
+	assert.match(b, /^ {2}b {2}5h: 10%, resets in (59m|1h 0m) · week: 0% \(checked 0m ago\)$/);
+	assert.doesNotMatch(login, /week/);
+});
+
+test("the weekly usage reported by the bridge is stored with the 5h usage", () => {
+	writeAccounts("a", { a: 0.4, b: 0.1 });
+	handlers.after_provider_response({ headers: { ...headers(0.5), "anthropic-ratelimit-unified-7d-utilization": "0.3", "anthropic-ratelimit-unified-7d-reset": String(RESET + 86400) } }, ctx);
+	assert.deepEqual(usageOf("a").week, { utilization: 0.3, resetsAt: RESET + 86400 });
+	assert.equal(usageOf("a").utilization, 0.5);
 });
 
 test("without a UI the account list is still printed as a notice", async () => {

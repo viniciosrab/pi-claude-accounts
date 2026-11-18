@@ -22,5 +22,6 @@ export function retryNotice(from: string, to: string, reason: string): string {
 /** The refused account's window is full until its reset; a reset already past is unknown again. */
 export function exhaustedUsage(previous: Usage | undefined, now: number): Usage {
 	const resetsAt = previous?.resetsAt !== undefined && previous.resetsAt > now ? previous.resetsAt : undefined;
-	return resetsAt === undefined ? { utilization: 1, checkedAt: now } : { utilization: 1, resetsAt, checkedAt: now };
+	const usage: Usage = resetsAt === undefined ? { utilization: 1, checkedAt: now } : { utilization: 1, resetsAt, checkedAt: now };
+	return previous?.week ? { ...usage, week: previous.week } : usage;
 }

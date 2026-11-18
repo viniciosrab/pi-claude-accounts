@@ -2,8 +2,11 @@
 
 export const THRESHOLD = 0.95;
 
-/** `checkedAt` (Unix seconds) is when the numbers were observed; absent on data saved by older versions. */
-export type Usage = { utilization: number; resetsAt?: number; checkedAt?: number };
+/** Utilization is a 0..1 fraction; `resetsAt` is Unix seconds. */
+export type Window = { utilization: number; resetsAt?: number };
+/** The 5h window plus, when reported, the weekly one (`week`, display only: S1). `checkedAt` (Unix
+ *  seconds) is when the numbers were observed; absent on data saved by older versions. */
+export type Usage = Window & { checkedAt?: number; week?: Window };
 /** `authFailed`: Claude Code rejected the token; cleared by the next successful response or check. */
 export type Account = { name: string; usage?: Usage; authFailed?: boolean };
 export type Pick = { name: string; switched: boolean };
@@ -12,8 +15,12 @@ export type Pick = { name: string; switched: boolean };
 export function effectiveUtilization(account: Account, now: number): number {
 	const u = account.usage;
 	if (!u) return 0;
-	if (u.resetsAt !== undefined && u.resetsAt <= now) return 0;
-	return u.utilization;
+	return windowUtilization(u, now);
+}
+
+/** A window that already reset counts as empty. */
+export function windowUtilization(w: Window, now: number): number {
+	return w.resetsAt !== undefined && w.resetsAt <= now ? 0 : w.utilization;
 }
 
 const usable = (a: Account) => !a.authFailed;

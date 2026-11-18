@@ -7,11 +7,17 @@ const ev = (status: string, five?: object) =>
 
 test("reads the last five_hour window from stream-json output", () => {
 	const out = ["{\"type\":\"system\"}", ev("allowed", { utilization: 0.2, resetsAt: 10 }), "garbage", ev("allowed", { utilization: 0.3, resetsAt: 11 })].join("\n");
-	assert.deepEqual(parseProbeOutput(out), { utilization: 0.3, resetsAt: 11 });
+	assert.deepEqual(parseProbeOutput(out), { utilization: 0.3, resetsAt: 11, week: { utilization: 0.9, resetsAt: undefined } });
 });
 
 test("an exhausted account still reports its window", () => {
-	assert.deepEqual(parseProbeOutput(ev("rejected", { utilization: 1, resetsAt: 50 })), { utilization: 1, resetsAt: 50 });
+	assert.deepEqual(parseProbeOutput(ev("rejected", { utilization: 1, resetsAt: 50 })), { utilization: 1, resetsAt: 50, week: { utilization: 0.9, resetsAt: undefined } });
+});
+
+test("reads the seven_day window as the weekly usage", () => {
+	const event = (windows: object) => JSON.stringify({ type: "rate_limit_event", rate_limit_info: { unifiedWindows: windows } });
+	assert.deepEqual(parseProbeOutput(event({ five_hour: { utilization: 0.2, resetsAt: 10 }, seven_day: { utilization: 0.4, resetsAt: 900 } })), { utilization: 0.2, resetsAt: 10, week: { utilization: 0.4, resetsAt: 900 } });
+	assert.deepEqual(parseProbeOutput(event({ five_hour: { utilization: 0.2, resetsAt: 10 } })), { utilization: 0.2, resetsAt: 10 });
 });
 
 test("no five_hour data yields undefined", () => {
