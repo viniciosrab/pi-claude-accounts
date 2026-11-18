@@ -42,3 +42,9 @@ test("exhausted usage keeps a future reset and counts as full", () => {
 	assert.deepEqual(exhaustedUsage({ utilization: 0.2, resetsAt: 500 }, 1_000), { utilization: 1, checkedAt: 1_000 });
 	assert.deepEqual(exhaustedUsage(undefined, 1_000), { utilization: 1, checkedAt: 1_000 });
 });
+
+test("hitting the 5h limit keeps the last weekly usage", () => {
+	const week = { utilization: 0.4, resetsAt: 90_000 };
+	assert.deepEqual(exhaustedUsage({ utilization: 0.97, resetsAt: 2_000, week }, 1_000), { utilization: 1, resetsAt: 2_000, checkedAt: 1_000, week });
+	assert.deepEqual(exhaustedUsage({ utilization: 0.2, resetsAt: 500, week }, 1_000), { utilization: 1, checkedAt: 1_000, week });
+});

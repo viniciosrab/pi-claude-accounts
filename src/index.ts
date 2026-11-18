@@ -9,7 +9,7 @@ import { completeArgs } from "./completions.ts";
 import { formatReset } from "./format.ts";
 import { parseFiveHour } from "./headers.ts";
 import { exhaustedUsage, isLimitFailure, retryNotice } from "./limit.ts";
-import { effectiveUtilization, pickAccount, pickNewSessionAccount, pickSessionAccount, THRESHOLD, type Usage } from "./policy.ts";
+import { effectiveUtilization, pickAccount, pickNewSessionAccount, pickSessionAccount, THRESHOLD, windowUtilization, type Usage, type Window } from "./policy.ts";
 import { isAuthFailure, PREFETCH_AT, probeAccount, staleAccounts } from "./probe.ts";
 import { addAccount, isLoginAccount, loadStore, removeAccount, renameAccount, updateStore, type Store } from "./store.ts";
 
@@ -98,11 +98,14 @@ export default function (pi: ExtensionAPI) {
 	};
 	const age = (u: Usage) => (u.checkedAt === undefined ? "" : ` (checked ${Math.max(0, Math.round((now() - u.checkedAt) / 60))}m ago)`);
 	const REJECTED = "token rejected, re-add it";
+	const window = (w: Window) => {
+		const reset = formatReset(w.resetsAt, now());
+		return pct(windowUtilization(w, now())) + (reset ? `, ${reset}` : "");
+	};
 	const describe = (s: Store) =>
 		s.accounts
 			.map((a) => {
-				const reset = a.usage ? formatReset(a.usage.resetsAt, now()) : "";
-				const usage = a.usage ? pct(effectiveUtilization(a, now())) + (reset ? `, ${reset}` : "") + age(a.usage) : "n/a";
+				const usage = a.usage ? window(a.usage) + (a.usage.week ? ` · week: ${window(a.usage.week)}` : "") + age(a.usage) : "n/a";
 				return `${a.name === s.active ? "*" : " "} ${a.name}  5h: ${usage}${a.authFailed ? `  [${REJECTED}]` : ""}`;
 			})
 			.join("\n");
@@ -111,7 +114,7 @@ export default function (pi: ExtensionAPI) {
 	// so with a UI the list opens as a panel that stays until closed; picking a line does nothing.
 	const showList = async (ctx: ExtensionContext, extra = "") => {
 		if (!ctx.hasUI) return ctx.ui.notify(describe(load()) + (extra ? `\n${extra}` : ""), extra ? "warning" : "info");
-		await ctx.ui.select(`Claude accounts (5h usage)${extra ? ` · ${extra}` : ""} · Esc to close`, describe(load()).split("\n"));
+		await ctx.ui.select(`Claude accounts (5h and weekly usage)${extra ? ` · ${extra}` : ""} · Esc to close`, describe(load()).split("\n"));
 	};
 
 	// Always merges into the latest store: probes finish in the background, after other writes.
@@ -360,7 +363,8 @@ export default function (pi: ExtensionAPI) {
 		const s = load();
 		const label = (n: string) => {
 			const a = s.accounts.find((x) => x.name === n)!;
-			return `${n === s.active ? "* " : "  "}${n}  (5h: ${a.usage ? pct(effectiveUtilization(a, now())) : "n/a"})${a.authFailed ? `  [${REJECTED}]` : ""}`;
+			const week = a.usage?.week ? `, week: ${pct(windowUtilization(a.usage.week, now()))}` : "";
+			return `${n === s.active ? "* " : "  "}${n}  (5h: ${a.usage ? pct(effectiveUtilization(a, now())) : "n/a"}${week})${a.authFailed ? `  [${REJECTED}]` : ""}`;
 		};
 		const choice = await ctx.ui.select(title, names.map(label));
 		return choice === undefined ? undefined : names[names.map(label).indexOf(choice)];
@@ -368,7 +372,7 @@ export default function (pi: ExtensionAPI) {
 
 	const refreshFlow = async (ctx: ExtensionContext) => {
 		const names = load().accounts.map((a) => a.name);
-		ctx.ui.notify(`Checking 5h usage of ${names.length} accounts (about 10s; uses a tiny bit of each limit)...`, "info");
+		ctx.ui.notify(`Checking 5h and weekly usage of ${names.length} accounts (about 10s; uses a tiny bit of each limit)...`, "info");
 		const answered = await refreshUsage(names);
 		await showList(ctx, answered < names.length ? `${names.length - answered} account(s) did not answer; check their tokens.` : "");
 	};
