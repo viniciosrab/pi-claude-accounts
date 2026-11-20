@@ -39,12 +39,24 @@ export function loadStore(path: string): Store {
 }
 
 export function saveStore(path: string, store: Store): void {
-	mkdirSync(dirname(path), { recursive: true });
+	mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
 	// Write-then-rename so a concurrent reader (another Pi instance) never sees a half-written file.
 	const tmp = `${path}.${process.pid}.tmp`;
 	writeFileSync(tmp, `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
 	chmodSync(tmp, 0o600); // writeFileSync's mode is ignored when the file already exists
 	renameSync(tmp, path);
+}
+
+/** Moves a file an older version kept elsewhere to `to`. Never overwrites: when `to` already exists
+ *  the old file stays where it is. Another instance moving it first is not an error. */
+export function moveLegacyFile(from: string, to: string): void {
+	if (!existsSync(from) || existsSync(to)) return;
+	mkdirSync(dirname(to), { recursive: true, mode: 0o700 });
+	try {
+		renameSync(from, to);
+	} catch (e) {
+		if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+	}
 }
 
 /** Read-modify-write against the file, never an in-memory copy: several Pi instances share it. */

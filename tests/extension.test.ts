@@ -1,7 +1,7 @@
 // Drives the extension's event handlers with a stand-in Pi: the account store lives in a temp dir.
 
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,7 +32,7 @@ let notices: { text: string; level: string }[];
 // What the extension appended to the session file with pi.appendEntry.
 let recorded: { type: string; customType: string; data: any }[];
 const ctx = { model: { provider: "claude-bridge" }, ui: { notify: (text: string, level: string) => notices.push({ text, level }) } };
-const storeFile = () => join(dir, "claude-accounts.json");
+const storeFile = () => join(dir, "claude-accounts", "accounts.json");
 const readStore = () => JSON.parse(readFileSync(storeFile(), "utf-8"));
 const usageOf = (name: string) => readStore().accounts.find((a: any) => a.name === name).usage;
 const writeAccounts = (active: string, usage: Record<string, number>) =>
@@ -290,7 +290,7 @@ test("the remove menu offers the login account and says Claude Code stays logged
 	assert.deepEqual(readStore().accounts.map((a: any) => a.name), ["a", "b"]);
 });
 
-const logFile = () => join(dir, "claude-accounts-switches.jsonl");
+const logFile = () => join(dir, "claude-accounts", "switches.jsonl");
 const readLog = () => (existsSync(logFile()) ? readFileSync(logFile(), "utf-8").trim().split("\n").map((l) => JSON.parse(l)) : []);
 const reply = (cacheRead: number, cacheWrite: number) => ({
 	message: { role: "assistant", provider: "claude-bridge", stopReason: "stop", content: [], usage: { input: 2, output: 10, cacheRead, cacheWrite } },
@@ -527,4 +527,29 @@ test("without a UI the account list is still printed as a notice", async () => {
 	assert.equal(notices.length, 1);
 	assert.equal(notices[0].level, "info");
 	assert.match(notices[0].text, /^\* a {2}5h: 40%/);
+});
+
+test("files left in the agent dir root by older versions move into claude-accounts/ on load", () => {
+	const legacyStore = join(dir, "claude-accounts.json");
+	const legacyLog = join(dir, "claude-accounts-switches.jsonl");
+	const accounts = JSON.stringify({ active: "a", accounts: [{ name: "a", token: "tok-a" }] });
+	writeFileSync(legacyStore, accounts, { mode: 0o600 });
+	writeFileSync(legacyLog, '{"event":"switch"}\n');
+	load();
+	assert.equal(existsSync(legacyStore), false);
+	assert.equal(existsSync(legacyLog), false);
+	assert.equal(readFileSync(storeFile(), "utf-8"), accounts);
+	assert.equal(statSync(storeFile()).mode & 0o777, 0o600);
+	assert.equal(statSync(join(dir, "claude-accounts")).mode & 0o777, 0o700);
+	assert.equal(readFileSync(logFile(), "utf-8"), '{"event":"switch"}\n');
+});
+
+test("a legacy file never overwrites one already in claude-accounts/", () => {
+	const legacyStore = join(dir, "claude-accounts.json");
+	mkdirSync(join(dir, "claude-accounts"), { recursive: true });
+	writeFileSync(storeFile(), '{"active":"new","accounts":[{"name":"new","token":"t"}]}');
+	writeFileSync(legacyStore, '{"active":"old","accounts":[{"name":"old","token":"t"}]}');
+	load();
+	assert.equal(readFileSync(storeFile(), "utf-8"), '{"active":"new","accounts":[{"name":"new","token":"t"}]}');
+	assert.equal(existsSync(legacyStore), true);
 });
