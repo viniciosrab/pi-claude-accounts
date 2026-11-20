@@ -13,7 +13,7 @@ pi install git:github.com/viniciosrab/pi-claude-accounts
 1. For each extra account, log in to it and run `claude setup-token` to get a token.
 2. In Pi, run `/claude-accounts`, choose **Add account**, and paste the name and token.
 
-The account you are already logged in with in Claude Code is listed too (as `default`); you can rename or remove it. Removing it only stops this extension from listing and using it; Claude Code stays logged in. To bring it back, delete `"loginRemoved": true` from `~/.pi/agent/claude-accounts.json`. The last account left cannot be removed.
+The account you are already logged in with in Claude Code is listed too (as `default`); you can rename or remove it. Removing it only stops this extension from listing and using it; Claude Code stays logged in. To bring it back, delete `"loginRemoved": true` from `~/.pi/agent/claude-accounts/accounts.json`. The last account left cannot be removed.
 
 ## Commands
 
@@ -42,8 +42,8 @@ Run `/claude-accounts` for a menu, or use the subcommands (they autocomplete):
 ## Notes
 
 - Each switch loses the prompt cache, so the first reply on the new account is slower and costlier.
-- Every switch is logged to `~/.pi/agent/claude-accounts-switches.jsonl`: both accounts' usage, the context size, and the next three replies on the new account (5h usage and cache tokens), so you can see what a switch cost.
-- Tokens are stored in `~/.pi/agent/claude-accounts.json` (mode 0600).
+- Every switch is logged to `~/.pi/agent/claude-accounts/switches.jsonl`: both accounts' usage, the context size, and the next three replies on the new account (5h usage and cache tokens), so you can see what a switch cost.
+- Tokens are stored in `~/.pi/agent/claude-accounts/accounts.json` (mode 0600, in a 0700 folder). Older versions kept both files in `~/.pi/agent` itself; they are moved into `claude-accounts/` the first time Pi loads the extension. Reload every open Pi window after updating, so none keeps writing to the old place.
 - Rotating subscriptions to get around usage limits may conflict with Anthropic's terms.
 
 ## Development

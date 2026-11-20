@@ -3,7 +3,7 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { completeArgs } from "./completions.ts";
 import { formatReset } from "./format.ts";
@@ -11,7 +11,7 @@ import { parseFiveHour } from "./headers.ts";
 import { exhaustedUsage, isLimitFailure, retryNotice } from "./limit.ts";
 import { effectiveUtilization, pickAccount, pickNewSessionAccount, pickSessionAccount, THRESHOLD, windowUtilization, type Usage, type Window } from "./policy.ts";
 import { isAuthFailure, PREFETCH_AT, probeAccount, staleAccounts } from "./probe.ts";
-import { addAccount, isLoginAccount, loadStore, removeAccount, renameAccount, updateStore, type Store } from "./store.ts";
+import { addAccount, isLoginAccount, loadStore, moveLegacyFile, removeAccount, renameAccount, updateStore, type Store } from "./store.ts";
 
 const ENV = "CLAUDE_CODE_OAUTH_TOKEN";
 // What the user exported before any Pi set ENV. Subagent processes inherit the parent's ENV, which is
@@ -23,9 +23,17 @@ const ENTRY = "claude-accounts";
 const PROVIDER = "claude-bridge";
 const USAGE = "Usage: /claude-accounts add <name> [token] | list | refresh | use <name> | rename <name> <new-name> | remove <name> | status";
 
-const storePath = () => join(getAgentDir(), "claude-accounts.json");
+// Everything this extension keeps lives in its own folder (0700: the store holds tokens).
+const dataDir = () => join(getAgentDir(), "claude-accounts");
+const storePath = () => join(dataDir(), "accounts.json");
 // One JSON line per switch and per reply right after it, so what a switch cost can be measured later.
-const logPath = () => join(getAgentDir(), "claude-accounts-switches.jsonl");
+const logPath = () => join(dataDir(), "switches.jsonl");
+/** Older versions kept both files in the agent dir root; move them into dataDir() once. */
+const migrateLegacyFiles = () => {
+	mkdirSync(dataDir(), { recursive: true, mode: 0o700 });
+	moveLegacyFile(join(getAgentDir(), "claude-accounts.json"), storePath());
+	moveLegacyFile(join(getAgentDir(), "claude-accounts-switches.jsonl"), logPath());
+};
 // Replies logged after a switch: the 5h header lags about one reply behind, and the first reply pays
 // for re-caching the conversation on the new account.
 const LOGGED_REPLIES = 3;
@@ -41,6 +49,7 @@ const retrySettings = () => {
 };
 
 export default function (pi: ExtensionAPI) {
+	migrateLegacyFiles();
 	if (process.env[EXTERNAL] === undefined) process.env[EXTERNAL] = process.env[ENV] ?? "";
 	const externalToken = process.env[EXTERNAL] || undefined; // what the login account means when the user exported a token
 	// No in-memory copy: other Pi instances write the same file, so every read and write goes to disk.
