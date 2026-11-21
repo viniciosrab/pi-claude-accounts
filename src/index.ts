@@ -343,8 +343,8 @@ export default function (pi: ExtensionAPI) {
 	/** Gets a token through `claude setup-token`: the browser sign-in picks the account. Undefined when
 	 *  no token came (paste one instead), null when the user cancelled. */
 	const browserToken = async (ctx: ExtensionContext, n: string): Promise<string | null | undefined> => {
-		// The child must log in on its own, not reuse the token this process exports.
-		const { [ENV]: _, ...env } = process.env;
+		// The child must log in on its own, not reuse the token this process exports or the user's.
+		const { [ENV]: _, [EXTERNAL]: __, ...env } = process.env;
 		const run = runSetupToken({ env, onUrl: (url) => ctx.ui.notify(`Browser did not open? Sign in at ${url}`, "info") });
 		const came = new AbortController();
 		const result = run.done.then((r) => (came.abort(), r));

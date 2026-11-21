@@ -26,7 +26,9 @@ export const setupTokenCommand = (platform: NodeJS.Platform = process.platform):
 
 // Terminal escapes: OSC (links, titles) up to BEL or ST, then CSI and the other short ones.
 const ESCAPES = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[@-_]/g;
-const plain = (output: string) => output.replace(ESCAPES, "");
+// A space, not nothing: Claude Code moves the cursor instead of printing spaces, and a value must end
+// where an escape starts.
+const plain = (output: string) => output.replace(ESCAPES, " ");
 // Both count only once a line break or space follows: output arrives in pieces, and a piece may end
 // inside the value or inside an escape, whose leftover parameters would otherwise look like part of it.
 export const extractToken = (output: string) => plain(output).match(/(sk-ant-oat01-[A-Za-z0-9_-]+)\s/)?.[1];
