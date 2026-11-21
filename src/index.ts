@@ -352,11 +352,21 @@ export default function (pi: ExtensionAPI) {
 		// an empty Enter only reopens it.
 		let title = `Authorize "${n}" in the browser that opened, signed in to that account. Paste a code here only if the page shows one; Esc cancels.`;
 		while (!came.signal.aborted) {
-			const code = await ctx.ui.input(title, "code (optional)", { signal: came.signal });
+			let code: string | undefined;
+			try {
+				code = await ctx.ui.input(title, "code (optional)", { signal: came.signal });
+			} catch (e) {
+				if (!came.signal.aborted) throw e; // a dialog that rejects on abort is the token coming
+			}
 			if (came.signal.aborted) break;
 			if (code === undefined) {
 				run.cancel();
 				return null;
+			}
+			// A token the user already had is used as is, not typed into the sign-in.
+			if (/^\s*sk-ant-/.test(code)) {
+				run.cancel();
+				return code;
 			}
 			if (code.trim()) {
 				run.sendCode(code);

@@ -93,7 +93,7 @@ const alive = (pid: number) => {
 	}
 };
 const waitFor = async (check: () => boolean) => {
-	for (let i = 0; i < 100 && !check(); i++) await new Promise((r) => setTimeout(r, 20));
+	for (let i = 0; i < 200 && !check(); i++) await new Promise((r) => setTimeout(r, 20));
 	return check();
 };
 // Like `script` running `claude`: the process started gets a child of its own, which must stop too.
@@ -110,11 +110,16 @@ test("cancel stops the whole process group, the grandchild included", async () =
 	assert.ok(await waitFor(() => !alive(pid)), "grandchild still running");
 });
 
-test("Pi exiting mid sign-in stops it too", async () => {
-	const file = join(mkdtempSync(join(tmpdir(), "setup-token-")), "pid");
+test("Pi exiting or being killed mid sign-in stops it too", async () => {
 	const src = join(import.meta.dirname, "../src/setup-token.ts");
-	const script = `const { runSetupToken } = await import(${JSON.stringify(src)}); runSetupToken({ command: ${JSON.stringify(withGrandchild(file))} }); setTimeout(() => process.exit(0), 300);`;
-	execFileSync(process.execPath, ["--input-type=module", "-e", script]);
-	const pid = await pidIn(file);
-	assert.ok(await waitFor(() => !alive(pid)), "grandchild still running after exit");
+	// Leaves once the grandchild is up, by a normal exit or by a signal it cannot handle.
+	for (const leave of ["process.exit(0)", 'process.kill(process.pid, "SIGKILL")']) {
+		const file = join(mkdtempSync(join(tmpdir(), "setup-token-")), "pid");
+		const script = `import { existsSync, readFileSync } from "node:fs"; const { runSetupToken } = await import(${JSON.stringify(src)}); runSetupToken({ command: ${JSON.stringify(withGrandchild(file))} }); setInterval(() => { if (existsSync(${JSON.stringify(file)}) && readFileSync(${JSON.stringify(file)}, "utf-8").trim()) ${leave}; }, 20);`;
+		try {
+			execFileSync(process.execPath, ["--input-type=module", "-e", script]);
+		} catch {} // the SIGKILL
+		const pid = await pidIn(file);
+		assert.ok(await waitFor(() => !alive(pid)), `grandchild still running after ${leave}`);
+	}
 });

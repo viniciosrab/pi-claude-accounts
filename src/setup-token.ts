@@ -14,6 +14,9 @@ export type SetupTokenRun = {
 };
 
 const LOGIN = "stty cols 1000 2>/dev/null; exec claude setup-token";
+const MAX_OUTPUT = 64 * 1024;
+/** Waits while Pi ($1) and the sign-in ($2) both run; when Pi is gone, stops the sign-in's group. */
+const WATCH = 'while kill -0 "$1" 2>/dev/null && kill -0 "$2" 2>/dev/null; do sleep 1; done; kill -0 "$1" 2>/dev/null || kill -TERM -- "-$2" 2>/dev/null';
 /** `script` takes its arguments differently on Linux (util-linux) and macOS (BSD). */
 export const setupTokenCommand = (platform: NodeJS.Platform = process.platform): [string, string[]] | undefined => {
 	if (platform === "linux") return ["script", ["-qfec", LOGIN, "/dev/null"]];
@@ -56,8 +59,14 @@ export function runSetupToken(opts: {
 			process.kill(-child.pid!, "SIGTERM");
 		} catch {} // already gone, or it never started
 	};
-	// Pi quitting mid sign-in would otherwise leave it running, waiting on the browser.
+	// Pi quitting mid sign-in would otherwise leave it running, waiting on the browser. A signal that
+	// kills Pi skips "exit", so a small watcher stops the group once Pi is gone.
 	process.once("exit", stop);
+	const watcher =
+		child.pid === undefined
+			? undefined
+			: spawn("sh", ["-c", WATCH, "sh", String(process.pid), String(child.pid)], { stdio: "ignore", detached: true }).on("error", () => {});
+	watcher?.unref();
 	let output = "";
 	let url: string | undefined;
 	let settle!: (r: SetupTokenResult) => void;
@@ -69,11 +78,13 @@ export function runSetupToken(opts: {
 		clearTimeout(timer);
 		process.removeListener("exit", stop);
 		stop();
+		watcher?.kill();
 		settle(r);
 	};
 	const timer = setTimeout(() => finish({ error: "timed out waiting for the browser sign-in" }), opts.timeoutMs ?? 10 * 60_000);
 	const read = (chunk: Buffer) => {
-		output += chunk.toString("utf-8");
+		// Claude Code redraws while it waits; only the recent output can hold what is still to come.
+		output = (output + chunk.toString("utf-8")).slice(-MAX_OUTPUT);
 		if (!url && (url = extractAuthUrl(output))) opts.onUrl?.(url);
 		const token = extractToken(output);
 		if (token) finish({ token });

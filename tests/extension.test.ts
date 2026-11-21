@@ -666,3 +666,21 @@ test("add with a token, without a UI or with a taken name never opens the browse
 		{ text: 'account "b" already exists', level: "error" },
 	]);
 });
+
+test("a token pasted into the sign-in dialog is stored as is, and the sign-in stops", async () => {
+	const login = fakeLogin();
+	await command("add w", withUI(async () => " sk-ant-oat01-had-it "));
+	assert.ok(login.cancelled);
+	assert.deepEqual(login.codes, []);
+	assert.equal(readStore().accounts.at(-1).token, "sk-ant-oat01-had-it");
+});
+
+test("a sign-in dialog that rejects when the token comes still stores the token", async () => {
+	const login = fakeLogin();
+	const rejecting = (_t: string, signal?: AbortSignal) => new Promise<undefined>((_, reject) => signal!.addEventListener("abort", () => reject(new Error("aborted"))));
+	const done = command("add w", withUI(rejecting));
+	await new Promise((r) => setImmediate(r));
+	login.settle({ token: "sk-ant-oat01-new" });
+	await done;
+	assert.equal(readStore().accounts.at(-1).token, "sk-ant-oat01-new");
+});
