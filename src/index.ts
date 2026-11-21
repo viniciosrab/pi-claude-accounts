@@ -348,17 +348,20 @@ export default function (pi: ExtensionAPI) {
 		const run = runSetupToken({ env, onUrl: (url) => ctx.ui.notify(`Browser did not open? Sign in at ${url}`, "info") });
 		const came = new AbortController();
 		const result = run.done.then((r) => (came.abort(), r));
-		const code = await ctx.ui.input(
-			`Authorize "${n}" in the browser that opened, signed in to that account. Paste a code here only if the page shows one; Esc cancels.`,
-			"code (optional)",
-			{ signal: came.signal },
-		);
-		if (!came.signal.aborted) {
-			if (!code?.trim()) {
+		// The dialog stays open until the token comes, so Esc can still cancel after a code was sent;
+		// an empty Enter only reopens it.
+		let title = `Authorize "${n}" in the browser that opened, signed in to that account. Paste a code here only if the page shows one; Esc cancels.`;
+		while (!came.signal.aborted) {
+			const code = await ctx.ui.input(title, "code (optional)", { signal: came.signal });
+			if (came.signal.aborted) break;
+			if (code === undefined) {
 				run.cancel();
 				return null;
 			}
-			run.sendCode(code);
+			if (code.trim()) {
+				run.sendCode(code);
+				title = `Code sent; waiting for "${n}" to be authorized. Paste another code if the page shows one; Esc cancels.`;
+			}
 		}
 		const r = await result;
 		if ("token" in r) return r.token;

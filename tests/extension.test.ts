@@ -604,13 +604,28 @@ test("add signs in through the browser and stores the token it gives, with no pa
 });
 
 test("a code typed in the sign-in dialog goes to claude setup-token", async () => {
+	prompts.length = 0;
 	const login = fakeLogin();
-	const done = command("add w", withUI(async () => "abc#123"));
+	const answers = ["abc#123"];
+	const done = command("add w", withUI((_t, signal) => (answers.length ? Promise.resolve(answers.shift()) : untilAborted(signal))));
 	await new Promise((r) => setImmediate(r));
 	login.settle({ token: "sk-ant-oat01-new" });
 	await done;
 	assert.deepEqual(login.codes, ["abc#123"]);
 	assert.equal(readStore().accounts.at(-1).token, "sk-ant-oat01-new");
+	// The dialog stays open after the code, saying it was sent.
+	assert.match(prompts[1].title, /^Code sent; waiting for "w" to be authorized/);
+});
+
+test("an empty Enter in the sign-in dialog keeps waiting, and Esc after a code still cancels", async () => {
+	prompts.length = 0;
+	const login = fakeLogin();
+	const answers: (string | undefined)[] = ["", "  ", "abc", undefined];
+	await command("add w", withUI(async () => answers.shift()));
+	assert.equal(prompts.length, 4);
+	assert.deepEqual(login.codes, ["abc"]);
+	assert.ok(login.cancelled);
+	assert.deepEqual(notices, [{ text: "Cancelled; nothing added.", level: "info" }]);
 });
 
 test("Esc in the sign-in dialog stops the sign-in and adds nothing", async () => {

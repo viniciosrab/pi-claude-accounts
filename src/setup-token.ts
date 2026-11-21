@@ -24,8 +24,12 @@ export const setupTokenCommand = (platform: NodeJS.Platform = process.platform):
 // Terminal escapes: OSC (links, titles) up to BEL or ST, then CSI and the other short ones.
 const ESCAPES = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[@-_]/g;
 const plain = (output: string) => output.replace(ESCAPES, "");
-export const extractToken = (output: string) => plain(output).match(/sk-ant-oat01-[A-Za-z0-9_-]+/)?.[0];
-export const extractAuthUrl = (output: string) => plain(output).match(/https:\/\/claude\.ai\/oauth\/authorize\?[^\s\x07]+/)?.[0];
+// Both count only once a line break or space follows: output arrives in pieces, and a piece may end
+// inside the value or inside an escape, whose leftover parameters would otherwise look like part of it.
+export const extractToken = (output: string) => plain(output).match(/(sk-ant-oat01-[A-Za-z0-9_-]+)\s/)?.[1];
+export const extractAuthUrl = (output: string) => plain(output).match(/(https:\/\/claude\.ai\/oauth\/authorize\?[^\s\x07\x1b]+)\s/)?.[1];
+/** Anything token-shaped, so an error never shows a credential the extractor missed. */
+const redact = (text: string) => text.replace(/sk-ant-\S*/g, "[token]");
 /** The last lines the process printed, to say why no token came. */
 const tail = (output: string) =>
 	plain(output)
@@ -33,6 +37,7 @@ const tail = (output: string) =>
 		.map((l) => l.trim())
 		.filter(Boolean)
 		.slice(-3)
+		.map(redact)
 		.join(" / ")
 		.slice(0, 300);
 
@@ -44,7 +49,15 @@ export function runSetupToken(opts: {
 }): SetupTokenRun {
 	const command = opts.command ?? setupTokenCommand();
 	if (!command) return { done: Promise.resolve({ error: `not supported on ${process.platform}` }), sendCode() {}, cancel() {} };
-	const child = spawn(command[0], command[1], { env: opts.env ?? process.env, stdio: ["pipe", "pipe", "pipe"] });
+	// Its own process group, so stopping it also stops `claude` under `script` and its sign-in listener.
+	const child = spawn(command[0], command[1], { env: opts.env ?? process.env, stdio: ["pipe", "pipe", "pipe"], detached: true });
+	const stop = () => {
+		try {
+			process.kill(-child.pid!, "SIGTERM");
+		} catch {} // already gone, or it never started
+	};
+	// Pi quitting mid sign-in would otherwise leave it running, waiting on the browser.
+	process.once("exit", stop);
 	let output = "";
 	let url: string | undefined;
 	let settle!: (r: SetupTokenResult) => void;
@@ -54,23 +67,23 @@ export function runSetupToken(opts: {
 		if (settled) return;
 		settled = true;
 		clearTimeout(timer);
-		if (child.exitCode === null) child.kill();
+		process.removeListener("exit", stop);
+		stop();
 		settle(r);
 	};
 	const timer = setTimeout(() => finish({ error: "timed out waiting for the browser sign-in" }), opts.timeoutMs ?? 10 * 60_000);
 	const read = (chunk: Buffer) => {
 		output += chunk.toString("utf-8");
 		if (!url && (url = extractAuthUrl(output))) opts.onUrl?.(url);
-		// The token is complete once a character that cannot be part of it follows it.
 		const token = extractToken(output);
-		if (token && plain(output).length > plain(output).indexOf(token) + token.length) finish({ token });
+		if (token) finish({ token });
 	};
 	child.stdout.on("data", read);
 	child.stderr.on("data", read);
 	child.stdin.on("error", () => {}); // the process may end before a code is typed
 	child.on("error", (e) => finish({ error: e.message }));
 	child.on("close", (code) => {
-		const token = extractToken(output);
+		const token = extractToken(`${output}\n`);
 		finish(token ? { token } : { error: `claude setup-token ended (exit ${code})${tail(output) ? `: ${tail(output)}` : ""}` });
 	});
 	return {
