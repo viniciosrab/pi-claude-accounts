@@ -123,3 +123,10 @@ test("Pi exiting or being killed mid sign-in stops it too", async () => {
 		assert.ok(await waitFor(() => !alive(pid)), `grandchild still running after ${leave}`);
 	}
 });
+
+// Claude Code moves the cursor instead of printing spaces ("n\x1b[52G(c to copy)").
+test("text placed after the token by a cursor move or a color is never glued to it", () => {
+	for (const after of ["\x1b[39m\x1b[2Cnext\n", "\x1b[38;2;1;2;3mfoo\n", "\x1b[52G(c to copy)\n"]) {
+		assert.equal(extractToken(`${TOKEN}${after}`), TOKEN, JSON.stringify(after));
+	}
+});

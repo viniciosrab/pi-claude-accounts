@@ -593,6 +593,7 @@ test("add signs in through the browser and stores the token it gives, with no pa
 	await done;
 	assert.equal(login.started, 1);
 	assert.equal(login.env.CLAUDE_CODE_OAUTH_TOKEN, undefined); // the login does not reuse the exported token
+	assert.equal(login.env.PI_CLAUDE_ACCOUNTS_EXTERNAL_TOKEN, undefined); // nor the one the user exported
 	assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, "tok-a");
 	assert.deepEqual(readStore().accounts.at(-1), { name: "w", token: "sk-ant-oat01-new" });
 	assert.equal(prompts.length, 1);
