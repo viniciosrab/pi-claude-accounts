@@ -684,3 +684,12 @@ test("a sign-in dialog that rejects when the token comes still stores the token"
 	await done;
 	assert.equal(readStore().accounts.at(-1).token, "sk-ant-oat01-new");
 });
+
+test("a sign-in dialog that fails on its own stops the sign-in", async () => {
+	const login = fakeLogin();
+	await command("add w", withUI(async () => {
+		throw new Error("dialog broke");
+	}));
+	assert.ok(login.cancelled);
+	assert.deepEqual(notices, [{ text: "dialog broke", level: "error" }]);
+});

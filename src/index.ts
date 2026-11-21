@@ -356,7 +356,11 @@ export default function (pi: ExtensionAPI) {
 			try {
 				code = await ctx.ui.input(title, "code (optional)", { signal: came.signal });
 			} catch (e) {
-				if (!came.signal.aborted) throw e; // a dialog that rejects on abort is the token coming
+				// A dialog that rejects on abort is the token coming; any other failure ends the sign-in.
+				if (!came.signal.aborted) {
+					run.cancel();
+					throw e;
+				}
 			}
 			if (came.signal.aborted) break;
 			if (code === undefined) {
