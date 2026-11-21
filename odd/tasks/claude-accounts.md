@@ -27,7 +27,7 @@ Bridge facts: CLI spawned per run and kept across its tool calls (L11), inherits
 - T13 (S6,S7, L12) verify findings: runAccount after other retried errors and renames, no retry promised past Pi's budget, more limit wordings, subagents keep the user's own exported token + tests — inline — commit: 792890c
 - T14 (S1, L13) list and menus show the weekly (7d) usage and its reset next to the 5h one; display only, switching still uses only 5h + tests — inline — commit: 0a44633
 - T15 (L14) list sorted by weekly reset, soonest first; no upcoming reset goes last + tests — inline — commit: ba2d0c2
-- T16 (S4, L15) add without a token runs `claude setup-token` under `script`, reads the token from its output and stores it; code paste, Esc cancel, paste fallback + tests — inline — commit: 5067873, 15f5b44, f7560c1
+- T16 (S4, L15) add without a token runs `claude setup-token` under `script`, reads the token from its output and stores it; code paste, Esc cancel, paste fallback + tests — inline — commit: 5067873, 15f5b44, f7560c1, 3a5cb1e
 
 ## Log
 L1: Vamos criar agora um plugin... extensão aqui para o Pi... várias contas minhas do Claude Code. Quando chegar 95% do limite de 5 horas, automaticamente troca para outra conta... Sem pedir confirmação... Pode até botar um aviso aqui no Pi que foi trocado... uso o CloudBridge... analisar o CloudBridge.
