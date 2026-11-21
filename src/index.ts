@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { completeArgs } from "./completions.ts";
 import { formatReset } from "./format.ts";
 import { parseFiveHour } from "./headers.ts";
-import { exhaustedUsage, isLimitFailure, retryNotice } from "./limit.ts";
+import { exhaustedUsage, isLimitFailure, isOrgDisabledFailure, retryNotice } from "./limit.ts";
 import { effectiveUtilization, pickAccount, pickNewSessionAccount, pickSessionAccount, THRESHOLD, windowUtilization, type Usage, type Window } from "./policy.ts";
 import { isAuthFailure, PREFETCH_AT, probeAccount, staleAccounts } from "./probe.ts";
 import { runSetupToken } from "./setup-token.ts";
@@ -283,7 +283,8 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 		failedResponses++;
-		const authFailed = isAuthFailure(msg.errorMessage);
+		const orgDisabled = isOrgDisabledFailure(msg.errorMessage);
+		const authFailed = orgDisabled || isAuthFailure(msg.errorMessage);
 		if (!authFailed && !isLimitFailure(msg.errorMessage)) {
 			// A retry of any other error starts a new CLI, which takes this process's account.
 			try {
@@ -300,7 +301,7 @@ export default function (pi: ExtensionAPI) {
 			const to = pickAccount(s.accounts, failed, now()).name;
 			const target = s.accounts.find((a) => a.name === to);
 			const usable = target && to !== failed && !target.authFailed && effectiveUtilization(target, now()) < THRESHOLD;
-			const why = authFailed ? REJECTED : "limit reached";
+			const why = orgDisabled ? "organization disabled Claude Code access" : authFailed ? REJECTED : "limit reached";
 			if (!usable) {
 				ctx.ui.notify(`Claude account "${failed}": ${why}. No other account is available.`, "error");
 				return;

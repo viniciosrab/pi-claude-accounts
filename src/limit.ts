@@ -13,6 +13,14 @@ export function isLimitFailure(message: string | undefined): boolean {
 	return message !== undefined && LIMIT_FAILURE.test(message);
 }
 
+const ORG_DISABLED = /organization has disabled claude subscription access/i;
+
+/** True when the account's organization turned off Claude Code for subscriptions: the account is
+ *  unusable until an admin re-enables it, so it is skipped like a rejected token. */
+export function isOrgDisabledFailure(message: string | undefined): boolean {
+	return message !== undefined && ORG_DISABLED.test(message);
+}
+
 /** Replacement error text that Pi's auto-retry accepts ("service temporarily unavailable"). The
  *  original text is left out: words like "quota exceeded" or "billing" would make Pi give up. */
 export function retryNotice(from: string, to: string, reason: string): string {
