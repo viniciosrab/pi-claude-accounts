@@ -145,6 +145,40 @@ test("a rejected token switches and the run continues instead of asking to resen
 	assert.deepEqual(notices, [{ text: 'Claude account switched: a (10%) → b (10%) — "a": token rejected, re-add it; continuing on "b".', level: "warning" }]);
 });
 
+const ORG_DISABLED = "Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access";
+
+test("an organization that disabled Claude Code access switches again, chaining past it to a working account", () => {
+	writeAccounts("a", { a: 0.5, b: 0.1 });
+	handlers.session_start({}, ctx);
+	const first = handlers.message_end(failure(BRIDGE_LIMIT), ctx);
+	assert.equal(piRetries(first.message.errorMessage), true);
+	assert.equal(readStore().active, "b");
+	// "login" gets room meanwhile, so the only working account left is "login".
+	const store = readStore();
+	store.accounts.find((a: any) => a.name === "login").usage.utilization = 0.2;
+	writeFileSync(storeFile(), JSON.stringify(store));
+	const second = handlers.message_end(failure(ORG_DISABLED), ctx);
+	assert.equal(piRetries(second.message.errorMessage), true);
+	assert.equal(second.message.errorMessage, 'Claude service temporarily unavailable on account "b" (organization disabled Claude Code access); switched to "login" and retrying.');
+	assert.equal(readStore().active, "login");
+	assert.equal(readStore().accounts.find((a: any) => a.name === "b").authFailed, true);
+	assert.deepEqual(notices.map((n) => n.text), [
+		'Claude account switched: a (100%) → b (10%) — "a": limit reached; continuing on "b".',
+		'Claude account switched: b (10%) → login (20%) — "b": organization disabled Claude Code access; continuing on "login".',
+	]);
+	// The next prompt skips the disabled account instead of landing on it again.
+	handlers.before_agent_start({}, ctx);
+	assert.equal(readStore().active, "login");
+});
+
+test("an organization that disabled Claude Code access with no account left keeps the failure", () => {
+	writeAccounts("a", { a: 0.1, b: 0.97 });
+	handlers.session_start({}, ctx);
+	assert.equal(handlers.message_end(failure(ORG_DISABLED), ctx), undefined);
+	assert.equal(readStore().active, "a");
+	assert.deepEqual(notices, [{ text: 'Claude account "a": organization disabled Claude Code access. No other account is available.', level: "error" }]);
+});
+
 test("other errors and other providers are left alone", () => {
 	writeAccounts("a", { a: 0.9, b: 0.1 });
 	handlers.session_start({}, ctx);
