@@ -9,6 +9,11 @@ import { beforeEach, test } from "node:test";
 
 registerHooks({
 	resolve(specifier, context, next) {
+		// The browser sign-in is a stand-in each test sets in globalThis.setupToken.
+		if (specifier === "./setup-token.ts") {
+			const stub = "export const runSetupToken = (opts) => globalThis.setupToken(opts);";
+			return { url: `data:text/javascript,${encodeURIComponent(stub)}`, shortCircuit: true };
+		}
 		if (specifier !== "@earendil-works/pi-coding-agent") return next(specifier, context);
 		const source = "export const getAgentDir = () => process.env.TEST_AGENT_DIR;";
 		return { url: `data:text/javascript,${encodeURIComponent(source)}`, shortCircuit: true };
@@ -552,4 +557,139 @@ test("a legacy file never overwrites one already in claude-accounts/", () => {
 	load();
 	assert.equal(readFileSync(storeFile(), "utf-8"), '{"active":"new","accounts":[{"name":"new","token":"t"}]}');
 	assert.equal(existsSync(legacyStore), true);
+});
+
+// A stand-in `claude setup-token`: settles when the test says, records what the extension did with it.
+const fakeLogin = () => {
+	const login = { started: 0, env: undefined as any, codes: [] as string[], cancelled: false, settle: (_: any) => {}, opts: undefined as any };
+	(globalThis as any).setupToken = (opts: any) => {
+		login.started++;
+		login.env = opts.env;
+		login.opts = opts;
+		const done = new Promise((resolve) => (login.settle = resolve));
+		return { done, sendCode: (c: string) => login.codes.push(c), cancel: () => ((login.cancelled = true), login.settle({ error: "cancelled" })) };
+	};
+	return login;
+};
+const prompts: { title: string; signal?: AbortSignal }[] = [];
+/** A UI whose dialog answers `answer(title)`; the sign-in dialog waits until aborted or answered. */
+const withUI = (answer: (title: string, signal?: AbortSignal) => Promise<string | undefined>) => ({
+	...ctx,
+	hasUI: true,
+	ui: { ...ctx.ui, input: (title: string, _p: string, o?: { signal?: AbortSignal }) => (prompts.push({ title, signal: o?.signal }), answer(title, o?.signal)) },
+});
+const untilAborted = (signal?: AbortSignal) => new Promise<undefined>((r) => signal!.addEventListener("abort", () => r(undefined)));
+const SIGN_IN = /^Authorize "w" in the browser that opened/;
+
+test("add signs in through the browser and stores the token it gives, with no paste", async () => {
+	prompts.length = 0;
+	writeAccounts("a", { a: 0.1, b: 0.1 });
+	process.env.CLAUDE_CODE_OAUTH_TOKEN = "tok-a";
+	const login = fakeLogin();
+	const done = command("add w", withUI((title, signal) => (SIGN_IN.test(title) ? untilAborted(signal) : Promise.resolve("pasted"))));
+	await new Promise((r) => setImmediate(r));
+	login.opts.onUrl("https://claude.ai/oauth/authorize?x");
+	login.settle({ token: "sk-ant-oat01-new" });
+	await done;
+	assert.equal(login.started, 1);
+	assert.equal(login.env.CLAUDE_CODE_OAUTH_TOKEN, undefined); // the login does not reuse the exported token
+	assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, "tok-a");
+	assert.deepEqual(readStore().accounts.at(-1), { name: "w", token: "sk-ant-oat01-new" });
+	assert.equal(prompts.length, 1);
+	assert.ok(prompts[0].signal!.aborted); // the dialog closes by itself once the token came
+	assert.deepEqual(notices, [
+		{ text: "Browser did not open? Sign in at https://claude.ai/oauth/authorize?x", level: "info" },
+		{ text: 'Account "w" added.', level: "info" },
+	]);
+});
+
+test("a code typed in the sign-in dialog goes to claude setup-token", async () => {
+	prompts.length = 0;
+	const login = fakeLogin();
+	const answers = ["abc#123"];
+	const done = command("add w", withUI((_t, signal) => (answers.length ? Promise.resolve(answers.shift()) : untilAborted(signal))));
+	await new Promise((r) => setImmediate(r));
+	login.settle({ token: "sk-ant-oat01-new" });
+	await done;
+	assert.deepEqual(login.codes, ["abc#123"]);
+	assert.equal(readStore().accounts.at(-1).token, "sk-ant-oat01-new");
+	// The dialog stays open after the code, saying it was sent.
+	assert.match(prompts[1].title, /^Code sent; waiting for "w" to be authorized/);
+});
+
+test("an empty Enter in the sign-in dialog keeps waiting, and Esc after a code still cancels", async () => {
+	prompts.length = 0;
+	const login = fakeLogin();
+	const answers: (string | undefined)[] = ["", "  ", "abc", undefined];
+	await command("add w", withUI(async () => answers.shift()));
+	assert.equal(prompts.length, 4);
+	assert.deepEqual(login.codes, ["abc"]);
+	assert.ok(login.cancelled);
+	assert.deepEqual(notices, [{ text: "Cancelled; nothing added.", level: "info" }]);
+});
+
+test("Esc in the sign-in dialog stops the sign-in and adds nothing", async () => {
+	const login = fakeLogin();
+	await command("add w", withUI(async () => undefined));
+	assert.ok(login.cancelled);
+	assert.ok(!existsSync(storeFile()) || !readStore().accounts.some((a: any) => a.name === "w"));
+	assert.deepEqual(notices, [{ text: "Cancelled; nothing added.", level: "info" }]);
+});
+
+test("when the sign-in gives no token, the token can still be pasted", async () => {
+	prompts.length = 0;
+	const login = fakeLogin();
+	const done = command("add w", withUI((title, signal) => (SIGN_IN.test(title) ? untilAborted(signal) : Promise.resolve(" sk-ant-oat01-pasted "))));
+	await new Promise((r) => setImmediate(r));
+	login.settle({ error: "claude setup-token ended (exit 127): claude: not found" });
+	await done;
+	assert.equal(readStore().accounts.at(-1).token, "sk-ant-oat01-pasted");
+	assert.match(prompts[1].title, /^Token for "w"/);
+	assert.deepEqual(notices, [
+		{ text: "No token from `claude setup-token` (claude setup-token ended (exit 127): claude: not found); paste one instead.", level: "warning" },
+		{ text: 'Account "w" added.', level: "info" },
+	]);
+});
+
+test("add with a token, without a UI or with a taken name never opens the browser", async () => {
+	const login = fakeLogin();
+	writeAccounts("a", { a: 0.1, b: 0.1 });
+	await command("add w sk-ant-oat01-given", withUI(async () => "x"));
+	assert.equal(readStore().accounts.at(-1).token, "sk-ant-oat01-given");
+	await command("add v", { ...ctx, ui: { ...ctx.ui, input: async () => undefined } });
+	assert.ok(!readStore().accounts.some((a: any) => a.name === "v"));
+	await command("add b", withUI(async () => "x"));
+	assert.equal(login.started, 0);
+	assert.deepEqual(notices, [
+		{ text: 'Account "w" added.', level: "info" },
+		{ text: "No token given; nothing added.", level: "info" },
+		{ text: 'account "b" already exists', level: "error" },
+	]);
+});
+
+test("a token pasted into the sign-in dialog is stored as is, and the sign-in stops", async () => {
+	const login = fakeLogin();
+	await command("add w", withUI(async () => " sk-ant-oat01-had-it "));
+	assert.ok(login.cancelled);
+	assert.deepEqual(login.codes, []);
+	assert.equal(readStore().accounts.at(-1).token, "sk-ant-oat01-had-it");
+});
+
+test("a sign-in dialog that rejects when the token comes still stores the token", async () => {
+	const login = fakeLogin();
+	const rejecting = (_t: string, signal?: AbortSignal) => new Promise<undefined>((_, reject) => signal!.addEventListener("abort", () => reject(new Error("aborted"))));
+	const done = command("add w", withUI(rejecting));
+	await new Promise((r) => setImmediate(r));
+	login.settle({ token: "sk-ant-oat01-new" });
+	await done;
+	assert.equal(readStore().accounts.at(-1).token, "sk-ant-oat01-new");
+});
+
+test("a sign-in dialog that fails on its own stops the sign-in", async () => {
+	const login = fakeLogin();
+	await command("add w", withUI(async () => {
+		throw new Error("dialog broke");
+	}));
+	assert.ok(login.cancelled);
+	assert.deepEqual(notices, [{ text: "dialog broke", level: "error" }]);
 });

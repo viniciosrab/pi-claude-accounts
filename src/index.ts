@@ -11,6 +11,7 @@ import { parseFiveHour } from "./headers.ts";
 import { exhaustedUsage, isLimitFailure, retryNotice } from "./limit.ts";
 import { effectiveUtilization, pickAccount, pickNewSessionAccount, pickSessionAccount, THRESHOLD, windowUtilization, type Usage, type Window } from "./policy.ts";
 import { isAuthFailure, PREFETCH_AT, probeAccount, staleAccounts } from "./probe.ts";
+import { runSetupToken } from "./setup-token.ts";
 import { addAccount, isLoginAccount, loadStore, moveLegacyFile, removeAccount, renameAccount, updateStore, type Store } from "./store.ts";
 
 const ENV = "CLAUDE_CODE_OAUTH_TOKEN";
@@ -339,10 +340,56 @@ export default function (pi: ExtensionAPI) {
 		});
 	});
 
+	/** Gets a token through `claude setup-token`: the browser sign-in picks the account. Undefined when
+	 *  no token came (paste one instead), null when the user cancelled. */
+	const browserToken = async (ctx: ExtensionContext, n: string): Promise<string | null | undefined> => {
+		// The child must log in on its own, not reuse the token this process exports.
+		const { [ENV]: _, ...env } = process.env;
+		const run = runSetupToken({ env, onUrl: (url) => ctx.ui.notify(`Browser did not open? Sign in at ${url}`, "info") });
+		const came = new AbortController();
+		const result = run.done.then((r) => (came.abort(), r));
+		// The dialog stays open until the token comes, so Esc can still cancel after a code was sent;
+		// an empty Enter only reopens it.
+		let title = `Authorize "${n}" in the browser that opened, signed in to that account. Paste a code here only if the page shows one; Esc cancels.`;
+		while (!came.signal.aborted) {
+			let code: string | undefined;
+			try {
+				code = await ctx.ui.input(title, "code (optional)", { signal: came.signal });
+			} catch (e) {
+				// A dialog that rejects on abort is the token coming; any other failure ends the sign-in.
+				if (!came.signal.aborted) {
+					run.cancel();
+					throw e;
+				}
+			}
+			if (came.signal.aborted) break;
+			if (code === undefined) {
+				run.cancel();
+				return null;
+			}
+			// A token the user already had is used as is, not typed into the sign-in.
+			if (/^\s*sk-ant-/.test(code)) {
+				run.cancel();
+				return code;
+			}
+			if (code.trim()) {
+				run.sendCode(code);
+				title = `Code sent; waiting for "${n}" to be authorized. Paste another code if the page shows one; Esc cancels.`;
+			}
+		}
+		const r = await result;
+		if ("token" in r) return r.token;
+		ctx.ui.notify(`No token from \`claude setup-token\` (${r.error}); paste one instead.`, "warning");
+		return undefined;
+	};
 	const addFlow = async (ctx: ExtensionContext, name?: string, token?: string) => {
 		const n = (name ?? (await ctx.ui.input("Account name", "e.g. work")))?.trim();
 		if (!n) return ctx.ui.notify("No name given; nothing added.", "info");
-		const t = (token ?? (await ctx.ui.input(`Token for "${n}" (run \`claude setup-token\` logged in to that account)`, "sk-ant-oat01-...")))?.trim();
+		// Before the sign-in, so it is not wasted on a name that cannot be added.
+		if (load().accounts.some((a) => a.name === n)) return ctx.ui.notify(`account "${n}" already exists`, "error");
+		const signedIn = token === undefined && ctx.hasUI ? await browserToken(ctx, n) : undefined;
+		if (signedIn === null) return ctx.ui.notify("Cancelled; nothing added.", "info");
+		const t = (token ?? signedIn ?? (await ctx.ui.input(`Token for "${n}" (run \`claude setup-token\` logged in to that account)`, "sk-ant-oat01-...")))?.trim();
 		if (!t) return ctx.ui.notify("No token given; nothing added.", "info");
 		update((s) => addAccount(s, n, t));
 		ctx.ui.notify(`Account "${n}" added.`, "info");

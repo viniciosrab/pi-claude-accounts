@@ -10,8 +10,11 @@ pi install git:github.com/viniciosrab/pi-claude-accounts
 
 ## Set up
 
-1. For each extra account, log in to it and run `claude setup-token` to get a token.
-2. In Pi, run `/claude-accounts`, choose **Add account**, and paste the name and token.
+In Pi, run `/claude-accounts add <name>` (or `/claude-accounts`, then **Add account**). The browser opens on Claude's sign-in page: sign in to the account you are adding and click **Authorize**. The token is saved on its own; there is nothing to copy or paste.
+
+- The browser signs in with whatever account it is already logged in to. To add a different one, log out of claude.ai first or open the link in a private window (if the browser does not open, the link is shown in Pi).
+- If the page shows a code instead of finishing, paste it into the dialog in Pi.
+- Esc cancels. If `claude setup-token` gives no token (Claude Code is not installed, or you are not on Linux or macOS), Pi asks you to paste one: run `claude setup-token` logged in to that account and paste what it prints. `/claude-accounts add <name> <token>` adds a token you already have.
 
 The account you are already logged in with in Claude Code is listed too (as `default`); you can rename or remove it. Removing it only stops this extension from listing and using it; Claude Code stays logged in. To bring it back, delete `"loginRemoved": true` from `~/.pi/agent/claude-accounts/accounts.json`. The last account left cannot be removed.
 
@@ -22,7 +25,7 @@ Run `/claude-accounts` for a menu, or use the subcommands (they autocomplete):
 ```
 /claude-accounts list                  # 5h and weekly usage and time until reset, per account, soonest weekly reset first
 /claude-accounts refresh               # check every account now
-/claude-accounts add <name> [token]
+/claude-accounts add <name> [token]   # without a token, signs in through the browser
 /claude-accounts use <name>
 /claude-accounts rename <name> <new-name>
 /claude-accounts remove <name>
